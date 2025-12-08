@@ -1,0 +1,19 @@
+[package]
+name = "ratatui-housecat"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+resolver = "3"
+members = [
+  "housecat-macros"
+]
+
+[dependencies]
+bon = "3.8.1"
+ratatui = "0.29.0"
+housecat-macros = { path = "./housecat-macros" }
+flume = "0.11.1"
+smol = "2.0.2"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+slab = "0.4.11"
