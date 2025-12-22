@@ -5,15 +5,15 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = [
-  "housecat-macros"
-]
 
 [dependencies]
 bon = "3.8.1"
 ratatui = "0.29.0"
-housecat-macros = { path = "./housecat-macros" }
 flume = "0.11.1"
 smol = "2.0.2"
-crossterm = { version = "0.29.0", features = ["event-stream"] }
 slab = "0.4.11"
+smallbox = { version = "0.8.8", features = ["nightly"] }
+smallvec = "1.15.1"
+derive_more = { version = "2.1.0", features = ["full"] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+tailcall = "1.0.1"

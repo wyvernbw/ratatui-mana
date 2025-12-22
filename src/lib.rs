@@ -1,453 +1,547 @@
+#![feature(impl_trait_in_assoc_type)]
+#![feature(option_into_flat_iter)]
+#![feature(try_blocks)]
+#![feature(trait_alias)]
 #![feature(async_fn_traits)]
 #![feature(unboxed_closures)]
-use std::{
-    any::Any,
-    cell::{Cell, RefCell},
-    marker::PhantomData,
-    pin::Pin,
-};
+#![feature(explicit_tail_calls)]
+#![allow(incomplete_features)]
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
-use flume::{Receiver, RecvError, Sender, r#async::RecvFut};
-use ratatui::{
-    buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
-    widgets::{Block, Paragraph, Widget},
-};
-use slab::Slab;
-use smol::stream::NextFuture;
+use std::io::Stdout;
 
-type Handler = Box<dyn Fn(Event) -> Pin<Box<dyn Future<Output = ()>>>>;
+use crossterm::event::{EnableMouseCapture, Event, KeyCode, KeyEvent};
+use flume::{Receiver, Sender};
+use ratatui::{Terminal, prelude::CrosstermBackend};
+use smallbox::SmallBox;
+use smol::stream::{Stream, StreamExt};
 
-pub struct Ctx {
-    hook_idx: Cell<usize>,
-    handler_idx: Cell<usize>,
-    event_sender: Sender<Event>,
-    event_receiver: Receiver<Event>,
-    signal_sender: Sender<()>,
-    signal_receiver: Receiver<()>,
-    state: RefCell<Slab<Box<RefCell<dyn Any + 'static>>>>,
-    handlers: RefCell<Slab<Handler>>,
+use crate::elements::Node;
+
+pub trait UpdateFn<Msg, Model> = Fn(Model, Msg) -> (Model, Effect<Msg>) + Send + Sync + 'static;
+pub trait InitFn<Msg, Model> = Fn() -> (Model, Effect<Msg>) + Send + Sync + 'static;
+pub trait ViewFn<Msg, Model> = Fn(&Model) -> Node<Msg> + Send + Sync + 'static;
+
+pub type Dispatch<Msg> = (Sender<Msg>, Receiver<Msg>);
+
+type PinnedFuture = SmallBox<dyn Future<Output = ()> + Send + Sync + 'static, [usize; 4]>;
+
+pub trait EffectFn<Msg>: Send + Sync + 'static {
+    fn run_effect(&self, tx: Sender<Msg>) -> PinnedFuture;
 }
 
-impl Default for Ctx {
-    fn default() -> Self {
-        let (event_sender, event_receiver) = flume::unbounded();
-        let (signal_sender, signal_receiver) = flume::unbounded();
-        Self {
-            hook_idx: Cell::new(0),
-            handler_idx: Cell::new(0),
-            event_sender,
-            event_receiver,
-            signal_sender,
-            signal_receiver,
-            state: RefCell::new(Slab::new()),
-            handlers: RefCell::new(Slab::new()),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct Signal<T> {
-    ctx: &'static Ctx,
-    id: usize,
-    _ty: PhantomData<T>,
-}
-
-impl Ctx {
-    pub fn create_signal<T>(&'static self, value: T) -> Signal<T>
-    where
-        T: 'static,
-    {
-        let idx = self.hook_idx.get();
-        if self.state.borrow().get(idx).is_some() {
-            Signal {
-                id: idx,
-                ctx: self,
-                _ty: PhantomData,
-            }
-        } else {
-            let id = self
-                .state
-                .borrow_mut()
-                .insert(Box::new(RefCell::new(value)));
-            self.hook_idx.set(id);
-            Signal {
-                id,
-                ctx: self,
-                _ty: PhantomData,
-            }
-        }
-    }
-
-    pub fn create_handler<F: Future<Output = ()> + 'static>(
-        &'static self,
-        f: impl Fn(Event) -> F + 'static,
-    ) {
-        // check already existing handler
-        let mut handlers = self.handlers.borrow_mut();
-        let id = self.handler_idx.get();
-        if handlers.contains(id) {
-            return;
-        }
-
-        // append new handler
-        let f = move |event| {
-            let future = f(event);
-            Box::pin(future) as Pin<Box<dyn Future<Output = ()> + 'static>>
-        };
-        let id = handlers.insert(Box::new(f));
-
-        // set handler index
-        self.handler_idx.set(id)
-    }
-
-    async fn handle_event(&'static self, event: Event) {
-        let futures = {
-            let mut handlers = self.handlers.borrow_mut();
-            let mut futures = Vec::with_capacity(handlers.len());
-
-            for (_, handler) in handlers.iter_mut() {
-                let event = event.clone();
-                futures.push(handler(event));
-            }
-            futures
-        };
-
-        for future in futures {
-            future.await
-        }
-    }
-
-    fn clear_hooks(&'static self) {
-        self.hook_idx.set(0);
-    }
-}
-
-impl<T: 'static + Clone> Signal<T> {
-    fn get(&self) -> T {
-        let state = self.ctx.state.borrow();
-        let value = state[self.id].borrow();
-        let value = value.downcast_ref::<T>().cloned();
-        value.unwrap()
-    }
-
-    fn set(&self, value: T) {
-        {
-            let state = self.ctx.state.borrow_mut();
-            let mut signal = state[self.id].borrow_mut();
-            let signal = signal.downcast_mut::<T>().unwrap();
-            *signal = value;
-        }
-        self.ctx.signal_sender.send(()).unwrap();
-    }
-}
-
-impl<T: 'static> Signal<T> {
-    fn update(&self, f: impl Fn(&mut T)) {
-        let state = self.ctx.state.borrow_mut();
-        let mut value = state[self.id].borrow_mut();
-        let value = value.downcast_mut::<T>().unwrap();
-        f(value);
-        self.ctx.signal_sender.send(()).unwrap();
-    }
-}
-
-pub trait ComponentMarker: std::fmt::Debug {
-    fn children(&self) -> Option<&[Component]> {
-        None
-    }
-    fn sizing(&self) -> Option<Constraint> {
-        None
-    }
-    fn layout(&self, sizes: &[Constraint]) -> Option<Layout> {
-        None
-    }
-    fn render(&self, area: Rect, buf: &mut Buffer) {}
-}
-
-pub type Component = Box<dyn ComponentMarker>;
-
-pub struct ComponentProps;
-
-pub fn props() -> ComponentProps {
-    ComponentProps
-}
-
-impl<W: Widget + std::fmt::Debug + Clone> ComponentMarker for W {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        Widget::render(self.clone(), area, buf);
-    }
-}
-
-pub trait IntoComponent {
-    fn into_component(self) -> Component;
-}
-impl<T> IntoComponent for T
+impl<F, Fut, Msg> EffectFn<Msg> for F
 where
-    T: ComponentMarker + 'static,
+    F: Fn(Sender<Msg>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + Sync + 'static,
 {
-    fn into_component(self) -> Component {
-        Box::new(self) as _
+    fn run_effect(&self, tx: Sender<Msg>) -> PinnedFuture {
+        let future = (self)(tx);
+        SmallBox::<Fut, [usize; 4]>::new(future as _)
     }
 }
+pub struct Effect<Msg>(SmallBox<dyn EffectFn<Msg>, [usize; 4]>);
 
-impl IntoComponent for Component {
-    fn into_component(self) -> Component {
-        self
+impl<Msg: Send + Sync + 'static> Effect<Msg> {
+    pub fn none() -> Self {
+        Self::new(async move |_| {})
+    }
+    pub fn new<
+        Fut: Future<Output = ()> + Send + Sync + 'static,
+        F: Fn(Sender<Msg>) -> Fut + 'static + Send + Sync,
+    >(
+        f: F,
+    ) -> Self {
+        Self(SmallBox::new(f) as _)
     }
 }
 
 #[derive(Debug)]
-pub struct ChildrenWrapper<C: ComponentMarker> {
-    base: C,
-    children: Vec<Component>,
+enum RuntimeMessage<Msg> {
+    App(Msg),
+    Term(std::io::Result<crossterm::event::Event>),
 }
 
-pub trait IntoComponentList {
-    fn into_component_list(self) -> Vec<Component>;
-}
-
-macro_rules! impl_into_component_list_tuples {
-    ($($T:ident),+) => {
-        impl<$($T: IntoComponent),+> IntoComponentList for ($($T,)+) {
-            fn into_component_list(self) -> Vec<Component> {
-                #[allow(non_snake_case)]
-                let ($($T,)+) = self;
-                vec![$($T.into_component()),+]
-            }
-        }
+#[tailcall::tailcall]
+#[allow(clippy::too_many_arguments)]
+async fn runtime<Msg, Model>(
+    model: Model,
+    view: impl ViewFn<Msg, Model>,
+    update: impl UpdateFn<Msg, Model>,
+    mut ctx: Ctx,
+    dispatch: Dispatch<Msg>,
+    quit_signal: impl Fn(&Msg) -> bool + Send + Sync + 'static,
+    tree: Option<Node<Msg>>,
+    event_stream: &mut (impl Stream<Item = RuntimeMessage<Msg>> + std::marker::Unpin),
+) -> std::io::Result<()>
+where
+    Model: Send + Sync + 'static,
+    Msg: Clone + 'static + std::fmt::Debug,
+{
+    let Some(event) = event_stream.next().await else {
+        return Ok(());
     };
-}
 
-impl_into_component_list_tuples!(T1);
-impl_into_component_list_tuples!(T1, T2);
-impl_into_component_list_tuples!(T1, T2, T3);
-impl_into_component_list_tuples!(T1, T2, T3, T4);
-impl_into_component_list_tuples!(T1, T2, T3, T4, T5);
-impl_into_component_list_tuples!(T1, T2, T3, T4, T5, T6);
-impl_into_component_list_tuples!(T1, T2, T3, T4, T5, T6, T7);
-impl_into_component_list_tuples!(T1, T2, T3, T4, T5, T6, T7, T8);
-impl_into_component_list_tuples!(T1, T2, T3, T4, T5, T6, T7, T8, T9);
-impl_into_component_list_tuples!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
-impl_into_component_list_tuples!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
-impl_into_component_list_tuples!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12);
+    match event {
+        RuntimeMessage::App(msg) if quit_signal(&msg) => Ok(()),
+        RuntimeMessage::App(msg) => {
+            let (model, effect) = update(model, msg);
+            smol::spawn(effect.0.run_effect(dispatch.0.clone())).detach();
 
-impl IntoComponentList for Vec<Component> {
-    fn into_component_list(self) -> Vec<Component> {
-        self
-    }
-}
+            let tree = view(&model);
 
-impl<const N: usize, T> IntoComponentList for [T; N]
-where
-    T: IntoComponent,
-{
-    fn into_component_list(self) -> Vec<Component> {
-        self.into_iter().map(|el| el.into_component()).collect()
-    }
-}
+            render(&mut ctx, &tree)?;
 
-pub trait WithChildren: Sized + ComponentMarker {
-    fn with(self, children: impl IntoComponentList) -> ChildrenWrapper<Self> {
-        ChildrenWrapper {
-            base: self,
-            children: children.into_component_list(),
+            runtime(
+                model,
+                view,
+                update,
+                ctx,
+                dispatch,
+                quit_signal,
+                Some(tree),
+                event_stream,
+            );
+        }
+        RuntimeMessage::Term(Err(err)) => panic!("{err}"),
+        RuntimeMessage::Term(Ok(event)) => {
+            let tree = tree.unwrap_or_else(|| view(&model));
+            let area = ctx.get_frame().area();
+            tree.handle_event(area, event, &dispatch)
+                .expect("failed to send message from event handler");
+
+            runtime(
+                model,
+                view,
+                update,
+                ctx,
+                dispatch,
+                quit_signal,
+                Some(tree),
+                event_stream,
+            );
         }
     }
 }
 
-impl<C: ComponentMarker> ComponentMarker for ChildrenWrapper<C> {
-    fn children(&self) -> Option<&[Component]> {
-        Some(&self.children)
-    }
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        let layout = self
-            .children
-            .iter()
-            .map(|node| node.sizing().unwrap_or(Constraint::Fill(1)))
-            .collect::<Vec<_>>();
-        let layout = self.base.layout(&layout);
-        let layout = layout
-            .unwrap_or_else(|| Layout::vertical([Constraint::Fill(1)].repeat(self.children.len())));
-        let areas = layout.split(area);
-        for (area, node) in areas.iter().zip(self.children.iter()) {
-            node.render(*area, buf);
-        }
-    }
-}
+pub mod elements {
+    use std::marker::PhantomData;
 
-#[derive(Debug)]
-pub struct HStack;
-
-impl ComponentMarker for HStack {
-    fn layout(&self, sizes: &[Constraint]) -> Option<Layout> {
-        Some(Layout::horizontal(sizes))
-    }
-}
-
-#[derive(Debug)]
-pub struct VStack;
-
-impl ComponentMarker for VStack {
-    fn layout(&self, sizes: &[Constraint]) -> Option<Layout> {
-        Some(Layout::vertical(sizes))
-    }
-}
-
-#[derive(Debug)]
-pub struct BlockWrapper<'a, C> {
-    base: C,
-    block: Block<'a>,
-}
-
-impl<'a, C> ComponentMarker for BlockWrapper<'a, C>
-where
-    C: ComponentMarker,
-{
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        let inner = self.block.inner(area);
-        Widget::render(self.block.clone(), area, buf);
-        self.base.render(inner, buf);
-    }
-}
-
-impl<C> WithChildren for C where C: IntoComponent + std::fmt::Debug + ComponentMarker {}
-
-trait WithBlock: Sized + ComponentMarker {
-    fn block(self, block: Block) -> BlockWrapper<Self> {
-        BlockWrapper { base: self, block }
-    }
-}
-
-impl<C> WithBlock for C where C: IntoComponent + std::fmt::Debug + ComponentMarker {}
-
-enum CtxEvent {
-    CrosstermEvent(Option<Result<Event, std::io::Error>>),
-    SignalEvent(Result<(), RecvError>),
-}
-
-trait CtxEventFuture {
-    async fn into_ctx_event(self) -> CtxEvent;
-}
-
-impl<'a> CtxEventFuture for NextFuture<'a, EventStream> {
-    async fn into_ctx_event(self) -> CtxEvent {
-        let result = self.await;
-        CtxEvent::CrosstermEvent(result)
-    }
-}
-
-impl<'a> CtxEventFuture for RecvFut<'a, ()> {
-    async fn into_ctx_event(self) -> CtxEvent {
-        let result = self.await;
-        CtxEvent::SignalEvent(result)
-    }
-}
-
-fn my_block() -> Block<'static> {
-    Block::bordered().border_type(ratatui::widgets::BorderType::Rounded)
-}
-
-#[housecat_macros::component]
-pub fn test_component(ctx: &'static Ctx) -> impl IntoComponent {
-    HStack.with((
-        Paragraph::new("Hello world!").block(my_block()),
-        Paragraph::new("I am an application").block(my_block()),
-        custom_component(ctx).block(my_block()),
-    ))
-}
-
-#[housecat_macros::component]
-fn custom_component(ctx: &'static Ctx) -> impl IntoComponent {
-    VStack.with((
-        Paragraph::new("custom component").block(my_block()),
-        counter(ctx),
-        Paragraph::new("Custom component magic child!").block(my_block()),
-    ))
-}
-
-#[housecat_macros::component]
-fn counter(ctx: &'static Ctx) -> impl IntoComponent {
-    let value = ctx.create_signal(0);
-
-    ctx.create_handler(move |event| async move {
-        let Event::Key(key_event) = event else { return };
-        if !matches!(key_event.kind, KeyEventKind::Press) {
-            return;
-        }
-
-        match key_event.code {
-            KeyCode::Char('a') => value.update(|x| *x += 1),
-            KeyCode::Char('b') => value.update(|x| *x -= 1),
-            _ => {}
-        }
-    });
-
-    HStack
-        .with((
-            "+1(a)".block(my_block()),
-            format!("value: {}", value.get()).block(my_block()),
-            "-1(b)".block(my_block()),
-        ))
-        .block(my_block())
-}
-
-#[cfg(test)]
-mod tests {
-
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState};
+    use crossterm::event::Event;
+    use crossterm::event::MouseEvent;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Constraint;
+    use ratatui::layout::Direction;
+    use ratatui::layout::Flex;
+    use ratatui::layout::Layout;
+    use ratatui::layout::Rect;
+    use ratatui::text::Text;
     use ratatui::widgets::Block;
-    use smol::{future::FutureExt, stream::StreamExt};
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::Widget;
+    use smallbox::SmallBox;
 
-    use crate::ComponentMarker;
-    use crate::Ctx;
-    use crate::CtxEventFuture;
-    use crate::test_component;
+    use crate::Dispatch;
 
-    #[test]
-    fn test() {
-        let mut terminal = ratatui::init();
-        let ctx: &'static Ctx = Box::leak(Box::default());
-        smol::block_on(async {
-            let mut redraw = || {
-                ctx.clear_hooks();
-                let root = test_component(ctx);
-                terminal
-                    .draw(|frame| root.render(frame.area(), frame.buffer_mut()))
-                    .unwrap();
-            };
-            redraw();
-            let mut stream = crossterm::event::EventStream::new();
-            loop {
-                let event = stream
-                    .next()
-                    .into_ctx_event()
-                    .race(ctx.signal_receiver.recv_async().into_ctx_event());
-                match event.await {
-                    crate::CtxEvent::CrosstermEvent(Some(Ok(event))) => {
-                        if let Event::Key(KeyEvent {
-                            code: KeyCode::Char('q'),
-                            kind: KeyEventKind::Press,
-                            ..
-                        }) = event
-                        {
-                            break;
-                        }
-                        // ctx.event_sender.send_async(event).await.unwrap();
-                        ctx.handle_event(event).await;
+    #[derive(derive_more::Debug)]
+    enum NodeKind<Msg> {
+        Leaf {
+            widget: SmallBox<dyn WidgetRender + Send + 'static, [u64; 1]>,
+        },
+        Container {
+            direction: Direction,
+            #[debug(skip)]
+            children: Vec<Node<Msg>>,
+        },
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct WidgetWrapper<W>(W);
+
+    pub trait WidgetRender: std::fmt::Debug {
+        fn widget_render(&self, area: Rect, buf: &mut Buffer);
+    }
+
+    impl<W: Widget + Clone + std::fmt::Debug> WidgetRender for WidgetWrapper<W> {
+        fn widget_render(&self, area: Rect, buf: &mut Buffer) {
+            self.0.clone().render(area, buf);
+        }
+    }
+
+    type Callback<Msg> = SmallBox<dyn Fn(Event, Rect) -> Option<Msg> + 'static, [u64; 4]>;
+
+    #[derive(derive_more::Debug)]
+    pub struct Node<Msg> {
+        inner: NodeKind<Msg>,
+        constraint: Constraint,
+        block: Block<'static>,
+        callback: Option<Callback<Msg>>,
+        flex: Option<Flex>,
+
+        #[debug(skip)]
+        _msg: PhantomData<Msg>,
+    }
+
+    impl<Msg: Clone + 'static> Node<Msg> {
+        pub fn render(&self, area: Rect, buf: &mut Buffer) {
+            self.block.clone().render(area, buf);
+            let area = self.block.inner(area);
+
+            match &self.inner {
+                NodeKind::Leaf { widget, .. } => {
+                    widget.widget_render(area, buf);
+                }
+                NodeKind::Container {
+                    direction,
+                    children,
+                } => {
+                    let layout =
+                        Layout::new(*direction, children.iter().map(|node| node.constraint));
+                    let layout = self
+                        .flex
+                        .map(|flex| layout.clone().flex(flex))
+                        .unwrap_or(layout);
+                    let areas = layout.split(area);
+                    for (node, area) in children.iter().zip(areas.iter()) {
+                        node.render(*area, buf);
                     }
-                    crate::CtxEvent::CrosstermEvent(None) => {}
-                    crate::CtxEvent::SignalEvent(Ok(())) => {
-                        redraw();
-                    }
-                    crate::CtxEvent::CrosstermEvent(Some(Err(err))) => {
-                        panic!("{}", err)
-                    }
-                    crate::CtxEvent::SignalEvent(Err(err)) => panic!("{}", err),
                 }
             }
-        });
-        ratatui::restore();
+        }
+
+        pub fn handle_event(
+            &self,
+            area: Rect,
+            event: Event,
+            dispatch: &Dispatch<Msg>,
+        ) -> Result<(), flume::SendError<Msg>> {
+            let area = self.block.inner(area);
+
+            if let Some(callback) = &self.callback
+                && let Some(msg) = callback(event.clone(), area)
+            {
+                dispatch.0.send(msg)?;
+            }
+
+            match &self.inner {
+                NodeKind::Leaf { .. } => {}
+                NodeKind::Container {
+                    direction,
+                    children,
+                } => {
+                    let layout =
+                        Layout::new(*direction, children.iter().map(|node| node.constraint));
+                    let layout = self
+                        .flex
+                        .map(|flex| layout.clone().flex(flex))
+                        .unwrap_or(layout);
+                    let areas = layout.split(area);
+                    for (node, area) in children.iter().zip(areas.iter()) {
+                        node.handle_event(*area, event.clone(), dispatch)?;
+                    }
+                }
+            };
+            Ok(())
+        }
+
+        pub fn block(self, block: Block<'static>) -> Self {
+            Self { block, ..self }
+        }
+
+        pub fn size(self, size: Constraint) -> Self {
+            Self {
+                constraint: size,
+                ..self
+            }
+        }
+        pub fn on(self, callback: impl Fn(Event, Rect) -> Option<Msg> + 'static) -> Self {
+            let callback = Some(SmallBox::new(callback) as _);
+            Self { callback, ..self }
+        }
+
+        pub fn on_click_keybind_down(
+            self,
+            keybind: impl Fn(Event, Rect) -> bool + 'static,
+            result: Msg,
+        ) -> Self {
+            let callback = move |event: Event, rect| {
+                let keybind_pressed = keybind(event.clone(), rect);
+
+                // holy matches!
+                let mouse_clicked = matches!(
+                    event,
+                    Event::Mouse(MouseEvent {
+                        kind:
+                            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                        column,
+                        row,
+                        ..
+                    })
+                    if rect.contains(ratatui::layout::Position { x: column, y: row })
+                );
+
+                if mouse_clicked || keybind_pressed {
+                    Some(result.clone())
+                } else {
+                    None
+                }
+            };
+            let callback = Some(SmallBox::new(callback) as _);
+            Self { callback, ..self }
+        }
+
+        pub fn on_click_down(self, result: Msg) -> Self {
+            self.on_click_keybind_down(|_, _| false, result)
+        }
+
+        pub fn flex(self, flex: Flex) -> Self {
+            Self {
+                flex: Some(flex),
+                ..self
+            }
+        }
+    }
+
+    pub fn vstack<Msg>(children: impl IntoIterator<Item = Node<Msg>>) -> Node<Msg> {
+        let children = children.into_iter().collect();
+
+        Node {
+            inner: NodeKind::Container {
+                direction: Direction::Vertical,
+                children,
+            },
+            constraint: Constraint::Fill(1),
+            block: Block::new(),
+            _msg: PhantomData,
+            callback: None,
+            flex: None,
+        }
+    }
+
+    pub fn hstack<Msg>(children: impl IntoIterator<Item = Node<Msg>>) -> Node<Msg> {
+        let children = children.into_iter().collect();
+
+        Node {
+            inner: NodeKind::Container {
+                direction: Direction::Horizontal,
+                children,
+            },
+            constraint: Constraint::Fill(1),
+            block: Block::new(),
+            callback: None,
+            _msg: PhantomData,
+            flex: None,
+        }
+    }
+
+    pub fn paragraph<Msg>(text: impl Into<Text<'static>>) -> Node<Msg> {
+        let p = Paragraph::new(text);
+        Node {
+            inner: NodeKind::Leaf {
+                widget: SmallBox::new(WidgetWrapper(p)) as _,
+            },
+            constraint: Constraint::Fill(1),
+            block: Block::new(),
+            _msg: PhantomData,
+            callback: None,
+            flex: None,
+        }
+    }
+
+    pub fn button<Msg>(text: impl Into<Text<'static>>) -> Node<Msg> {
+        Node {
+            block: Block::bordered().border_type(ratatui::widgets::BorderType::Rounded),
+            ..paragraph(text)
+        }
+    }
+}
+
+pub trait CrosstermEventExt {
+    fn is_keycode(&self, keycode: KeyCode) -> bool;
+}
+
+impl CrosstermEventExt for Event {
+    fn is_keycode(&self, keycode: KeyCode) -> bool {
+        matches!(self, Event::Key(KeyEvent { code, ..}) if code == &keycode)
+    }
+}
+
+pub async fn run<Msg, Model>(
+    init: impl InitFn<Msg, Model>,
+    view: impl ViewFn<Msg, Model>,
+    update: impl UpdateFn<Msg, Model>,
+    quit_signal: impl Fn(&Msg) -> bool + Send + Sync + 'static,
+) -> std::io::Result<()>
+where
+    Msg: Send + Sync + 'static,
+    Model: Send + Sync + 'static,
+    Msg: Clone + 'static + std::fmt::Debug,
+{
+    let dispatch = flume::unbounded::<Msg>();
+    let mut ctx = create_ctx();
+
+    ratatui::init();
+    crossterm::execute!(std::io::stdout(), EnableMouseCapture)?;
+
+    let (model, effect) = init();
+    smol::spawn(effect.0.run_effect(dispatch.0.clone())).detach();
+    let tree = view(&model);
+    render(&mut ctx, &tree)?;
+
+    let mut event_stream = smol::stream::race(
+        dispatch
+            .1
+            .clone()
+            .into_stream()
+            .fuse()
+            .map(RuntimeMessage::App),
+        crossterm::event::EventStream::new()
+            .fuse()
+            .map(RuntimeMessage::Term),
+    );
+    let result = runtime(
+        model,
+        view,
+        update,
+        ctx,
+        dispatch,
+        quit_signal,
+        None,
+        &mut event_stream,
+    )
+    .await;
+
+    ratatui::restore();
+
+    result
+}
+
+type Ctx = Terminal<CrosstermBackend<Stdout>>;
+
+fn create_ctx() -> Ctx {
+    ratatui::init()
+}
+
+fn render<Msg: Clone + 'static>(ctx: &mut Ctx, tree: &Node<Msg>) -> std::io::Result<()> {
+    ctx.draw(|frame| {
+        tree.render(frame.area(), frame.buffer_mut());
+    })
+    .map(|_| ())
+}
+
+fn propagate_event<Msg>(ctx: &Ctx, tree: &Node<Msg>, event: crossterm::event::Event) {}
+
+#[cfg(test)]
+pub mod test_app {
+    use std::time::Duration;
+
+    use crossterm::event::{Event, KeyCode, KeyEvent};
+    use ratatui::layout::{Constraint, Flex};
+
+    use ratatui::widgets::{Block, BorderType, Padding};
+
+    use crate::{CrosstermEventExt, run};
+    use crate::{Effect, elements::*};
+
+    #[derive(Debug, Default)]
+    struct AppState {
+        counter: isize,
+        done_sleeping: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    enum Message {
+        Quit,
+        UserClickedIncrement,
+        UserClickedDecrement,
+        AppAwoken,
+    }
+
+    #[test]
+    fn test() -> std::io::Result<()> {
+        smol::block_on(run(init, view, update, |msg| matches!(msg, Message::Quit)))
+    }
+
+    fn init() -> (AppState, Effect<Message>) {
+        (
+            AppState::default(),
+            Effect::new(async move |tx| {
+                // i promise this is a network request
+                smol::Timer::after(Duration::from_secs(3)).await;
+
+                _ = tx.send_async(Message::AppAwoken).await;
+            }),
+        )
+    }
+
+    fn view(app: &AppState) -> Node<Message> {
+        vstack([
+            hstack([
+                button("-1")
+                    .size(Constraint::Max(4))
+                    // add click and keybind handler
+                    .on_click_keybind_down(
+                        |event, _| event.is_keycode(KeyCode::Backspace),
+                        Message::UserClickedDecrement,
+                    ),
+                paragraph(format!("Mmm cheese 🧀 {:08}", app.counter))
+                    .size(Constraint::Max(24))
+                    .block(Block::new().padding(Padding::uniform(1))),
+                button("+1")
+                    .size(Constraint::Max(4))
+                    .on_click_down(Message::UserClickedIncrement),
+            ])
+            .flex(Flex::Center)
+            .size(Constraint::Max(3)), // comment for rustfmt,
+            // custom "component" vvv
+            // components do not encapsulate state.
+            the_sleeper(app),
+        ])
+        .flex(Flex::Center)
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title_top("Amazing application"),
+        )
+        // handler to send quit message
+        // any node can access terminal events
+        .on(|event, _| {
+            if event.is_keycode(KeyCode::Char('q')) {
+                Some(Message::Quit)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn the_sleeper(model: &AppState) -> Node<Message> {
+        hstack([
+            if model.done_sleeping {
+                paragraph("i am wide awake")
+            } else {
+                paragraph("i sleep...")
+            }
+            .size(Constraint::Max(16)), // another comment for rustfmt
+        ])
+        .size(Constraint::Length(1))
+        .flex(Flex::Center)
+    }
+
+    fn update(model: AppState, msg: Message) -> (AppState, Effect<Message>) {
+        let model = match msg {
+            Message::UserClickedIncrement => AppState {
+                counter: model.counter + 1,
+                ..model
+            },
+            Message::UserClickedDecrement => AppState {
+                counter: model.counter - 1,
+                ..model
+            },
+            Message::AppAwoken => AppState {
+                done_sleeping: true,
+                ..model
+            },
+            Message::Quit => model,
+        };
+        (model, Effect::none())
     }
 }
