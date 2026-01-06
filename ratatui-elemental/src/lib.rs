@@ -16,10 +16,11 @@ pub(crate) mod layout;
 pub mod prelude {
     use ratatui::{
         layout::{Direction, Rect},
+        text::Text,
         widgets::{Block, BorderType, Borders, Padding, Paragraph},
     };
 
-    use crate::layout::{ElWidget, ElementCtx, ElementIdx, LayoutParams, Size};
+    use crate::layout::{ElWidget, ElementCtx, ElementIdx, Justify, LayoutParams, Size};
 
     /// create element builder.
     ///
@@ -45,18 +46,20 @@ pub mod prelude {
         #[builder(default, overwritable)] width: Size,
         #[builder(default, overwritable)] height: Size,
         #[builder(default, overwritable)] direction: Direction,
+        #[builder(default, overwritable)] main_justify: Justify,
         #[builder(overwritable)] padding: Option<Padding>,
         #[builder(default, overwritable)] padding_left: u16,
         #[builder(default, overwritable)] padding_right: u16,
         #[builder(default, overwritable)] padding_top: u16,
         #[builder(default, overwritable)] padding_bottom: u16,
         #[builder(default, overwritable)] gap: u16,
-        children: Option<&[ElementIdx]>,
+        children: Option<Vec<ElementIdx>>,
     ) -> ElementIdx {
         let layout_params = layout_params.unwrap_or(LayoutParams {
             width,
             height,
             direction,
+            main_justify,
             padding: padding.unwrap_or(Padding {
                 left: padding_left,
                 right: padding_right,
@@ -71,11 +74,50 @@ pub mod prelude {
             .create(ctx)
     }
 
-    /// return type of [`block`]
-    ///
-    /// see [`element`] for more options.
-    pub type BlockElBuilder =
-        ElementBuilder<'static, 'static, Block<'static>, element_builder::Empty>;
+    /// wrapper around the element builder that allows modifying the inner paragraph.
+    /// call [`Self::commit_text`] to consume the text builder and return the element
+    /// builder.
+    #[derive(derive_more::Deref, derive_more::DerefMut)]
+    pub struct ElementTextBuilder<B> {
+        builder: B,
+        #[deref]
+        #[deref_mut]
+        paragraph: Paragraph<'static>,
+    }
+
+    impl<'f1, W: ElWidget, S: element_builder::State> ElementBuilder<'f1, W, S> {
+        /// wraps the [`ElementBuilder`] in a [`ElementTextBuilder`] that stores a paragraph
+        /// and allows the modification of it through its builder methods.
+        ///
+        /// see [`ElementTextBuilder`] and [`Paragraph`].
+        pub fn text(
+            self,
+            text: impl Into<Text<'static>>,
+        ) -> ElementTextBuilder<ElementBuilder<'f1, W, S>> {
+            ElementTextBuilder {
+                builder: self,
+                paragraph: Paragraph::new(text),
+            }
+        }
+    }
+
+    impl<'f1, W: ElWidget, S: element_builder::State> ElementTextBuilder<ElementBuilder<'f1, W, S>>
+    where
+        S::Children: element_builder::IsUnset,
+    {
+        /// commits the text, creating an element out of the paragraph widget and returns
+        /// the original [`ElementBuilder`].
+        pub fn commit_text(
+            self,
+            ctx: &mut ElementCtx,
+        ) -> ElementBuilder<'f1, W, impl element_builder::State + use<W, S>> {
+            let child = element(self.paragraph)
+                .width(Size::Grow)
+                .height(Size::Grow)
+                .create(ctx);
+            self.builder.children(vec![child])
+        }
+    }
 
     /// function for creating [`Block`] structs with sensible defaults around borders.
     ///
@@ -84,33 +126,45 @@ pub mod prelude {
     /// do not draw over the block's borders.
     ///
     /// see [`element`] for more options.
-    pub fn block(block: Block<'static>) -> BlockElBuilder {
-        // FIXME: when ratatui exposes `Block::borders`
-        let test_area = Rect {
-            x: 0,
-            y: 0,
-            width: 2,
-            height: 2,
-        };
-        let inner_area = block.inner(test_area);
-        let left = inner_area.left() - test_area.left();
-        let top = inner_area.top() - test_area.top();
-        let right = test_area.height - inner_area.height;
-        let bottom = test_area.height - inner_area.height;
-
-        element(block).padding(Padding {
-            left,
-            right,
-            top,
-            bottom,
-        })
+    pub fn block() -> Block<'static> {
+        Block::new()
     }
 
-    /// like [`block`], but sets the borders to [`BorderType::Rounded`] and [`Borders::ALL`].
-    ///
-    /// see [`element`] for more options.
-    pub fn block_rounded(bl: Block<'static>) -> BlockElBuilder {
-        block(bl.border_type(BorderType::Rounded).borders(Borders::all()))
+    /// wip
+    pub trait BlockExt<'a> {
+        /// wip
+        fn rounded(self) -> Self;
+        /// wip
+        fn commit(self) -> ElementBuilder<'a, Block<'a>, element_builder::Empty>;
+    }
+
+    impl BlockExt<'static> for Block<'static> {
+        fn rounded(self) -> Self {
+            self.borders(Borders::all())
+                .border_type(BorderType::Rounded)
+        }
+
+        fn commit(self) -> ElementBuilder<'static, Block<'static>, element_builder::Empty> {
+            // FIXME: when ratatui exposes `Block::borders`
+            let test_area = Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            };
+            let inner_area = self.inner(test_area);
+            let left = inner_area.left() - test_area.left();
+            let top = inner_area.top() - test_area.top();
+            let right = (test_area.height - inner_area.height).saturating_sub(1);
+            let bottom = (test_area.height - inner_area.height).saturating_sub(1);
+
+            element(self).padding(Padding {
+                left,
+                right,
+                top,
+                bottom,
+            })
+        }
     }
 
     /// marker trait implemented for any `ElementBuilder`.
@@ -132,10 +186,7 @@ pub mod prelude {
     /// ```
     pub trait ElementalBuilder {}
 
-    impl<'f1, 'f2, W: ElWidget, S: element_builder::State> ElementalBuilder
-        for ElementBuilder<'f1, 'f2, W, S>
-    {
-    }
+    impl<'f1, W: ElWidget, S: element_builder::State> ElementalBuilder for ElementBuilder<'f1, W, S> {}
 }
 
 #[cfg(test)]
@@ -148,8 +199,8 @@ mod tests {
     };
 
     use crate::{
-        layout::{ElementCtx, LayoutParams, Size},
-        prelude::{block, block_rounded, element},
+        layout::{ElementCtx, Justify, LayoutParams, Size},
+        prelude::{BlockExt, block},
     };
 
     fn buffer_to_string(buf: &Buffer) -> String {
@@ -184,25 +235,30 @@ mod tests {
         _ = tracing_subscriber::fmt::try_init();
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
         let mut ctx = ElementCtx::default();
-        let root = block(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title_top("parent")
-                .fg(Color::Red),
-        )
-        .children(&[
-            block_rounded(Block::bordered().title_top("child #0".to_string()))
-                .width(Size::Fixed(10))
-                .height(Size::Fixed(3))
-                .create(&mut ctx),
-            block_rounded(Block::bordered().title_top("child #1".to_string()))
-                .width(Size::Fixed(14))
-                .height(Size::Fixed(3))
-                .create(&mut ctx),
-        ])
-        .width(Size::Fixed(24))
-        .height(Size::Fixed(8))
-        .create(&mut ctx);
+        let root = block()
+            .rounded()
+            .title_top("parent")
+            .fg(Color::Red)
+            .commit()
+            .children(vec![
+                block()
+                    .rounded()
+                    .title_top("child #0".to_string())
+                    .commit()
+                    .width(Size::Fixed(10))
+                    .height(Size::Fixed(3))
+                    .create(&mut ctx),
+                block()
+                    .rounded()
+                    .title_top("child #1".to_string())
+                    .commit()
+                    .width(Size::Fixed(14))
+                    .height(Size::Fixed(3))
+                    .create(&mut ctx),
+            ])
+            .width(Size::Fixed(24))
+            .height(Size::Fixed(8))
+            .create(&mut ctx);
 
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
@@ -237,7 +293,7 @@ mod tests {
                 .title_top("parent")
                 .fg(Color::Red),
         )
-        .children(children)
+        .children(children.to_vec())
         .layout_params(LayoutParams {
             width: Size::Fixed(24),
             height: Size::Fixed(8),
@@ -279,7 +335,7 @@ mod tests {
                 .title_top("parent")
                 .fg(Color::Red),
         )
-        .children(children)
+        .children(children.to_vec())
         .layout_params(LayoutParams {
             width: Size::Fit,
             height: Size::Fit,
@@ -318,7 +374,7 @@ mod tests {
                 .title_top("parent")
                 .fg(Color::Red),
         )
-        .children(children)
+        .children(children.to_vec())
         .layout_params(LayoutParams {
             width: Size::Fit,
             height: Size::Fit,
@@ -356,13 +412,14 @@ mod tests {
                 .title_top("parent")
                 .fg(Color::Red),
         )
-        .children(children)
+        .children(children.to_vec())
         .layout_params(LayoutParams {
             width: Size::Fit,
             height: Size::Fit,
             direction: Direction::Horizontal,
             padding: Padding::uniform(1),
             gap: 2,
+            ..Default::default()
         })
         .create(&mut ctx);
         ctx.calculate_layout(root);
@@ -379,16 +436,20 @@ mod tests {
                 .border_type(BorderType::Rounded)
                 .title_top("sidebar".to_string()),
         )
-        .children(&[ElementCtx::element(
-            Paragraph::new("this sidebar is so amazing it can have long text that wraps around")
+        .children(vec![
+            ElementCtx::element(
+                Paragraph::new(
+                    "this sidebar is so amazing it can have long text that wraps around",
+                )
                 .wrap(ratatui::widgets::Wrap { trim: false }),
-        )
-        .layout_params(LayoutParams {
-            width: Size::Grow,
-            height: Size::Grow,
-            ..Default::default()
-        })
-        .create(&mut ctx)])
+            )
+            .layout_params(LayoutParams {
+                width: Size::Grow,
+                height: Size::Grow,
+                ..Default::default()
+            })
+            .create(&mut ctx),
+        ])
         .layout_params(LayoutParams {
             width: Size::Fixed(10),
             padding: Padding::uniform(1),
@@ -429,8 +490,9 @@ mod tests {
             gap: 1,
             height: Size::Grow,
             direction: Direction::Vertical,
+            ..Default::default()
         })
-        .children(&[child2, child3])
+        .children(vec![child2, child3])
         .create(&mut ctx);
         let root = ElementCtx::element(
             Block::bordered()
@@ -438,7 +500,7 @@ mod tests {
                 .title_top("parent")
                 .fg(Color::Red),
         )
-        .children(&[child0, child1])
+        .children(vec![child0, child1])
         .layout_params(LayoutParams {
             width: Size::Fixed(36),
             height: Size::Fixed(18),
@@ -481,7 +543,7 @@ mod tests {
                 .title_top("parent")
                 .fg(Color::Red),
         )
-        .children(children)
+        .children(children.to_vec())
         .layout_params(LayoutParams {
             width: Size::Fit,
             height: Size::Fit,
@@ -493,5 +555,40 @@ mod tests {
         ctx.calculate_layout(root);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_horizontal\n{}", buffer_to_string(&buf));
+    }
+
+    #[test]
+    fn test_list_justify() {
+        _ = tracing_subscriber::fmt::try_init();
+        for justify in Justify::iter() {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 50, 20));
+            let mut ctx = ElementCtx::default();
+            let root = block()
+                .rounded()
+                .title_top(format!("{justify:?}"))
+                .fg(Color::Red)
+                .commit()
+                .width(Size::Fixed(24))
+                .height(Size::Fixed(20))
+                .children(
+                    (0..3)
+                        .map(|idx| {
+                            block()
+                                .rounded()
+                                .commit()
+                                .text(format!("child #{idx}"))
+                                .commit_text(&mut ctx)
+                                .width(Size::Grow)
+                                .height(Size::Fixed(3))
+                                .create(&mut ctx)
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .main_justify(justify)
+                .create(&mut ctx);
+            ctx.calculate_layout(root);
+            ctx.render(root, buf.area, &mut buf);
+            tracing::info!("\ntest_list_justify\n{}", buffer_to_string(&buf));
+        }
     }
 }

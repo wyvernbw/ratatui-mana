@@ -55,15 +55,12 @@ impl ElementCtx {
         #[builder(start_fn)] widget: W,
         #[builder(finish_fn)] ctx: &mut Self,
         #[builder(default)] layout_params: LayoutParams,
-        children: Option<&[ElementIdx]>,
+        children: Option<Vec<ElementIdx>>,
     ) -> ElementIdx
     where
         W: ElWidget + 'static,
     {
-        let children = match children {
-            Some(children) => children.to_vec(),
-            None => Vec::default(),
-        };
+        let children = children.unwrap_or_default();
         let children = Arc::new(children);
         let widget_idx = ctx.widgets.insert(SmallBox::new(widget) as WidgetBox);
         let widget_idx = WidgetIdx(widget_idx);
@@ -244,16 +241,98 @@ impl ElementCtx {
         let children = self[root].children.clone();
         let padding = self[root].layout_params.padding;
         let gap = self[root].layout_params.gap;
-        let mut axis_start = 0;
+        let main_justify = self[root].layout_params.main_justify;
+        let space_used = children
+            .iter()
+            .copied()
+            .map(|child| axify(self[child].size, dir).main_axis)
+            .reduce(|acc, el| acc + el)
+            .unwrap_or_default();
+        let space_used = space_used + gap * children.len().saturating_sub(1) as u16;
+        let remaining_size = axify(self[root].size, dir)
+            .shrink(padding, dir)
+            .main_axis
+            .saturating_sub(space_used);
+
+        #[derive(Default)]
+        struct AlignValues {
+            start: u16,
+            inbetween: u16,
+            after: u16,
+            remainder: u16,
+        }
+
+        impl AlignValues {
+            fn tick_rem(&mut self) -> u16 {
+                match self.remainder {
+                    0 => 0,
+                    1.. => {
+                        self.remainder -= 1;
+                        1
+                    }
+                }
+            }
+        }
+
+        let mut align = match main_justify {
+            Justify::Start => AlignValues::default(),
+            Justify::Center => AlignValues {
+                start: remaining_size / 2,
+                inbetween: 0,
+                after: 0,
+                remainder: 0,
+            },
+            Justify::SpaceBetween if children.is_empty() => AlignValues::default(),
+            Justify::SpaceBetween => {
+                let div_by = (children.len().saturating_sub(1)) as u16;
+                let space = remaining_size / div_by;
+                let space_rem = remaining_size % div_by;
+                AlignValues {
+                    start: 0,
+                    inbetween: space,
+                    after: 0,
+                    remainder: space_rem,
+                }
+            }
+            Justify::SpaceAround if children.is_empty() => AlignValues::default(),
+            Justify::SpaceAround => {
+                let div_by = (children.len() * 2) as u16;
+                let space = remaining_size / div_by;
+                let space_rem = remaining_size % div_by;
+                AlignValues {
+                    start: space,
+                    inbetween: space * 2,
+                    after: space,
+                    remainder: space_rem,
+                }
+            }
+            Justify::SpaceEvenly if children.is_empty() => AlignValues::default(),
+            Justify::SpaceEvenly => {
+                let div_by = (children.len() * 2) as u16 + 2;
+                let space = remaining_size / div_by;
+                AlignValues {
+                    start: space * 2,
+                    inbetween: space * 2,
+                    after: space,
+                    remainder: 0,
+                }
+            }
+            Justify::End => AlignValues {
+                start: remaining_size,
+                inbetween: 0,
+                after: 0,
+                remainder: 0,
+            },
+        };
         for child in children.iter().copied() {
             self[child].position = self[root].position;
             match dir {
-                Direction::Horizontal => self[child].position.x += axis_start,
-                Direction::Vertical => self[child].position.y += axis_start,
+                Direction::Horizontal => self[child].position.x += align.start,
+                Direction::Vertical => self[child].position.y += align.start,
             }
             self[child].position += u16vec2(padding.left, padding.top);
-            axis_start = increase_axis(axis_start, dir, self[child].size);
-            axis_start += gap;
+            align.start = increase_axis(align.start, dir, self[child].size);
+            align.start += gap + align.inbetween + align.tick_rem();
             self.calculate_positions(child);
         }
     }
@@ -326,6 +405,19 @@ impl AxisSizes {
         }
     }
     #[inline(always)]
+    const fn shrink(self, padding: Padding, dir: Direction) -> AxisSizes {
+        match dir {
+            Direction::Horizontal => AxisSizes {
+                main_axis: self.main_axis.saturating_sub(padding.left + padding.right),
+                cross_axis: self.cross_axis.saturating_sub(padding.top + padding.bottom),
+            },
+            Direction::Vertical => AxisSizes {
+                main_axis: self.main_axis.saturating_sub(padding.top + padding.bottom),
+                cross_axis: self.cross_axis.saturating_sub(padding.left + padding.right),
+            },
+        }
+    }
+    #[inline(always)]
     fn increase(self, by: U16Vec2, dir: Direction) -> AxisSizes {
         match dir {
             Direction::Horizontal => AxisSizes {
@@ -380,6 +472,8 @@ pub struct LayoutParams {
     pub padding: Padding,
     #[builder(default)]
     pub gap: u16,
+    #[builder(default)]
+    pub main_justify: Justify,
 }
 
 impl LayoutParams {
@@ -403,6 +497,31 @@ pub enum Size {
     #[default]
     Fit,
     Grow,
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+pub enum Justify {
+    #[default]
+    Start,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+    End,
+}
+
+impl Justify {
+    pub fn iter() -> impl Iterator<Item = Justify> {
+        [
+            Self::Start,
+            Self::Center,
+            Self::SpaceBetween,
+            Self::SpaceAround,
+            Self::SpaceEvenly,
+            Self::End,
+        ]
+        .into_iter()
+    }
 }
 
 impl Size {
