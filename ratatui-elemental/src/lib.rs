@@ -3,8 +3,13 @@
 //! ratatui layout library
 
 #![forbid(missing_docs)]
+#![feature(negative_impls)]
+#![feature(alloc_layout_extra)]
+#![feature(ptr_as_ref_unchecked)]
+#![feature(downcast_unchecked)]
 
 pub(crate) mod layout;
+mod typemap;
 
 /// prelude module. contains public api for `ratatui-elemental`.
 ///
@@ -20,7 +25,7 @@ pub mod prelude {
         widgets::{Block, BorderType, Borders, Padding, Paragraph},
     };
 
-    use crate::layout::{ElWidget, ElementCtx, ElementIdx, Justify, LayoutParams, Size};
+    use crate::layout::{ElWidget, ElementCtx, ElementKey, Justify, LayoutParams, Size};
 
     /// create element builder.
     ///
@@ -53,8 +58,8 @@ pub mod prelude {
         #[builder(default, overwritable)] padding_top: u16,
         #[builder(default, overwritable)] padding_bottom: u16,
         #[builder(default, overwritable)] gap: u16,
-        children: Option<Vec<ElementIdx>>,
-    ) -> ElementIdx {
+        children: Option<Vec<ElementKey>>,
+    ) -> ElementKey {
         let layout_params = layout_params.unwrap_or(LayoutParams {
             width,
             height,

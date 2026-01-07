@@ -1,69 +1,93 @@
-use std::sync::Arc;
+use std::{
+    any::{Any, TypeId},
+    sync::Arc,
+};
 
 use bon::Builder;
 use derive_more as d;
-use generational_arena::{Arena, Index};
 use glam::{U16Vec2, u16vec2};
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Rect},
     widgets::{Padding, Widget},
 };
-use smallbox::SmallBox;
+use slotmap::{SlotMap, new_key_type};
 
-type ElementArena = Arena<TuiElement>;
-type WidgetBox = SmallBox<dyn ElWidget, usize>;
-type WidgetArena = Arena<WidgetBox>;
+use crate::typemap::{TypeArena, TypeKey, TypeMap};
 
-pub trait ElWidget: std::fmt::Debug {
+new_key_type! { pub struct ElementKey; }
+new_key_type! { pub struct WidgetKey; }
+type ElementArena = SlotMap<ElementKey, TuiElement>;
+
+pub trait ElWidget: std::fmt::Debug + Send + Any {
     fn render_element(&self, area: Rect, buf: &mut Buffer);
+    fn key_version(&self) -> usize {
+        unreachable!("no widget should ever call this")
+    }
 }
 
-impl<W> ElWidget for W
+impl<W: 'static> ElWidget for W
 where
-    W: Widget + Clone + std::fmt::Debug,
+    W: Widget + Clone + std::fmt::Debug + Send,
 {
     fn render_element(&self, area: Rect, buf: &mut Buffer) {
         self.clone().render(area, buf);
     }
 }
 
-#[derive(Default)]
-pub struct ElementCtx {
-    elements: ElementArena,
-    widgets: WidgetArena,
-}
+#[derive(Debug, Clone)]
+pub(crate) struct NopWidget;
 
-impl std::ops::Index<ElementIdx> for ElementCtx {
-    type Output = TuiElement;
-
-    fn index(&self, index: ElementIdx) -> &Self::Output {
-        &self.elements[*index]
+impl Widget for NopWidget {
+    fn render(self, _: Rect, _: &mut Buffer)
+    where
+        Self: Sized,
+    {
     }
 }
 
-impl std::ops::IndexMut<ElementIdx> for ElementCtx {
-    fn index_mut(&mut self, index: ElementIdx) -> &mut Self::Output {
-        &mut self.elements[*index]
+#[derive(Default)]
+pub struct ElementCtx {
+    elements: ElementArena,
+    widgets: TypeMap,
+}
+
+impl std::ops::Index<ElementKey> for ElementCtx {
+    type Output = TuiElement;
+
+    fn index(&self, index: ElementKey) -> &Self::Output {
+        &self.elements[index]
+    }
+}
+
+impl std::ops::IndexMut<ElementKey> for ElementCtx {
+    fn index_mut(&mut self, index: ElementKey) -> &mut Self::Output {
+        &mut self.elements[index]
     }
 }
 
 #[bon::bon]
 impl ElementCtx {
+    fn insert_widget<W: ElWidget + 'static>(&mut self, w: W) -> TypeKey {
+        self.widgets
+            .entry(TypeId::of::<W>())
+            .or_insert_with(|| TypeArena::with_capacity::<W>(32))
+            .insert(w)
+    }
     #[builder(finish_fn = create)]
     pub fn element<W>(
         #[builder(start_fn)] widget: W,
         #[builder(finish_fn)] ctx: &mut Self,
         #[builder(default)] layout_params: LayoutParams,
-        children: Option<Vec<ElementIdx>>,
-    ) -> ElementIdx
+        children: Option<Vec<ElementKey>>,
+    ) -> ElementKey
     where
         W: ElWidget + 'static,
+        W: Send,
     {
         let children = children.unwrap_or_default();
         let children = Arc::new(children);
-        let widget_idx = ctx.widgets.insert(SmallBox::new(widget) as WidgetBox);
-        let widget_idx = WidgetIdx(widget_idx);
+        let widget_idx = ctx.insert_widget(widget);
         let element = TuiElement {
             widget: widget_idx,
             layout_params,
@@ -71,11 +95,10 @@ impl ElementCtx {
             position: U16Vec2::default(),
             children,
         };
-        let element_idx = ctx.elements.insert(element);
 
-        ElementIdx(element_idx)
+        ctx.elements.insert(element)
     }
-    fn calculate_fit_sizes(&mut self, element: ElementIdx) {
+    fn calculate_fit_sizes(&mut self, element: ElementKey) {
         if let Size::Fixed(size) = self[element].layout_params.width {
             self[element].size.x = size
         }
@@ -117,7 +140,7 @@ impl ElementCtx {
             _ => {}
         }
     }
-    fn calculate_grow_sizes(&mut self, element: ElementIdx) {
+    fn calculate_grow_sizes(&mut self, element: ElementKey) {
         let children = self[element].children.clone();
         let padding = self[element].layout_params.padding;
         let max_size = self[element].size.saturating_sub(u16vec2(
@@ -151,7 +174,7 @@ impl ElementCtx {
 
         // main axis
         while remaining_size.main_axis > 0 {
-            let mut smallest: [Option<ElementIdx>; 2] = [None, None];
+            let mut smallest: [Option<ElementKey>; 2] = [None, None];
             let mut first = None;
             let mut all_equal = true;
             let mut grow_count = 0;
@@ -236,7 +259,7 @@ impl ElementCtx {
             self.calculate_grow_sizes(child);
         }
     }
-    fn calculate_positions(&mut self, root: ElementIdx) {
+    fn calculate_positions(&mut self, root: ElementKey) {
         let dir = self[root].layout_params.direction;
         let children = self[root].children.clone();
         let padding = self[root].layout_params.padding;
@@ -258,7 +281,6 @@ impl ElementCtx {
         struct AlignValues {
             start: u16,
             inbetween: u16,
-            after: u16,
             remainder: u16,
         }
 
@@ -279,7 +301,6 @@ impl ElementCtx {
             Justify::Center => AlignValues {
                 start: remaining_size / 2,
                 inbetween: 0,
-                after: 0,
                 remainder: 0,
             },
             Justify::SpaceBetween if children.is_empty() => AlignValues::default(),
@@ -290,7 +311,6 @@ impl ElementCtx {
                 AlignValues {
                     start: 0,
                     inbetween: space,
-                    after: 0,
                     remainder: space_rem,
                 }
             }
@@ -302,7 +322,6 @@ impl ElementCtx {
                 AlignValues {
                     start: space,
                     inbetween: space * 2,
-                    after: space,
                     remainder: space_rem,
                 }
             }
@@ -313,14 +332,12 @@ impl ElementCtx {
                 AlignValues {
                     start: space * 2,
                     inbetween: space * 2,
-                    after: space,
                     remainder: 0,
                 }
             }
             Justify::End => AlignValues {
                 start: remaining_size,
                 inbetween: 0,
-                after: 0,
                 remainder: 0,
             },
         };
@@ -336,15 +353,22 @@ impl ElementCtx {
             self.calculate_positions(child);
         }
     }
-    pub fn calculate_layout(&mut self, element: ElementIdx) {
+    pub fn calculate_layout(&mut self, element: ElementKey) {
         self.calculate_fit_sizes(element);
         self.calculate_grow_sizes(element);
         self.calculate_positions(element);
     }
-    pub fn render(&self, root: ElementIdx, area: Rect, buf: &mut Buffer) {
+    pub fn render(&self, root: ElementKey, area: Rect, buf: &mut Buffer) {
         let el = &self[root];
         let area = el.split_area(area);
-        self.widgets[*el.widget].render_element(area, buf);
+        let key = self[root].widget;
+        let typeid = key.typeid;
+        let widget = self
+            .widgets
+            .get(&typeid)
+            .and_then(|widgets| widgets.get_widget(key))
+            .expect("tui element points to nonexisting widget");
+        widget.render_element(area, buf);
         for child in el.children.iter().copied() {
             self.render(child, area, buf);
         }
@@ -439,25 +463,20 @@ impl AxisSizes {
     }
 }
 
-#[derive(d::Deref, d::From, Clone, Copy, Debug)]
-pub struct WidgetIdx(Index);
-#[derive(d::Deref, d::From, Clone, Copy, Debug)]
-pub struct ElementIdx(Index);
-
-impl ElementIdx {
-    pub fn children(self, ctx: &mut ElementCtx, children: &[ElementIdx]) -> Self {
+impl ElementKey {
+    pub fn children(self, ctx: &mut ElementCtx, children: &[ElementKey]) -> Self {
         ctx[self].children = Arc::new(children.to_vec());
         self
     }
 }
 
 pub struct TuiElement {
-    widget: WidgetIdx,
+    widget: TypeKey,
     layout_params: LayoutParams,
     position: U16Vec2,
     size: U16Vec2,
     // FIXME: double pointer indirection
-    children: Arc<Vec<ElementIdx>>,
+    children: Arc<Vec<ElementKey>>,
 }
 
 #[derive(Default, Builder)]
