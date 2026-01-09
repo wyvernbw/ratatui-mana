@@ -1,0 +1,19 @@
+[package]
+name = "mana-tui-elemental"
+version = "0.0.1"
+edition = "2024"
+license = "GPL-3.0"
+
+[dependencies]
+ratatui.workspace = true
+bon = { workspace = true, features = ["experimental-overwritable"] }
+derive_more.workspace = true
+tracing.workspace = true
+glam = "0.30.9"
+hecs = { version = "0.10.5", features = ["macros"] }
+rayon = "1.11.0"
+
+[dev-dependencies]
+crossterm.workspace = true
+tracing-subscriber = "0.3.22"
+color-eyre = "*"
