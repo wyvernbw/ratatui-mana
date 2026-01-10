@@ -33,11 +33,90 @@ use crate::layout::{
     TuiElMarker, Width,
 };
 
+/// create a ui element.
+///
+/// # Usage
+///
+/// ## Arguments
+///
+/// - `widget`: anything that implements the [`ElWidget`][crate::layout::ElWidget], so ratatui widgets and custom widgets.
+///
+/// ## Methods
+///
+/// - [`with`][UiBuilder::with] (optional): adds a component bundle to the element
+/// - [`children`][UiBuilder::children] (optional): adds children to the element
+/// - [`child`][UiBuilder::child] (optional): like `children`
+///
+/// # Example
+///
+/// barebones:
+///
+/// ```
+/// # use ratatui::widgets::Block;
+/// # use mana_tui_elemental::ui::*;
+/// # use mana_tui_elemental::prelude::*;
+///
+/// let mut ctx = ElementCtx::new();
+/// let root = ui(Block::new());
+/// ctx.spawn_ui(root);
+///
+/// ```
+///
+/// with components:
+///
+/// ```
+/// # use ratatui::widgets::Block;
+/// # use mana_tui_elemental::ui::*;
+/// # use mana_tui_elemental::prelude::*;
+///
+/// let mut ctx = ElementCtx::new();
+/// let root = ui(Block::new())
+///     .with((Width(Size::Grow), Height(Size::Fixed(40))));
+/// ctx.spawn_ui(root);
+///
+/// ```
+///
+/// with children:
+///
+/// ```
+/// # use ratatui::widgets::Block;
+/// # use mana_tui_elemental::ui::*;
+/// # use mana_tui_elemental::prelude::*;
+///
+/// let mut ctx = ElementCtx::new();
+/// let root = ui(Block::new());
+/// ctx.spawn_ui(root);
+///     .children((
+///         ui(Block::new()),
+///         ui(Block::new())
+///     ));
+///
+/// ```
+///
+/// full:
+///
+/// ```
+/// # use ratatui::widgets::Block;
+/// # use mana_tui_elemental::ui::*;
+/// # use mana_tui_elemental::prelude::*;
+///
+/// let mut ctx = ElementCtx::new();
+/// let root = ui(Block::new())
+///     .with((Width(Size::Grow), Height(Size::Fixed(40))))
+///     .children((
+///         ui(Block::new()),
+///         ui(Block::new())
+///     ));
+/// ctx.spawn_ui(root);
+///
+/// ```
 #[bon::builder]
 #[builder(finish_fn = done)]
 pub fn ui<W: ElWidget>(
     #[builder(start_fn)] widget: W,
     #[builder(field = EntityBuilder::new())] mut builder: EntityBuilder,
+    #[builder(setters(vis = "", name = children_flag))] _children: Option<()>,
+    #[builder(setters(vis = "", name = child_flag))] _child: Option<()>,
 ) -> EntityBuilder {
     fn render_system<E: ElWidget>(
         ctx: &ElementCtx,
@@ -84,27 +163,76 @@ pub fn ui<W: ElWidget>(
 
 impl<W, S> UiBuilder<W, S>
 where
-    S: ui_builder::IsComplete,
+    S: ui_builder::State,
+    S::Children: ui_builder::IsUnset,
+    S::Child: ui_builder::IsUnset,
     W: ElWidget,
 {
+    /// sets the children of the element. the argument must implement [`IntoUiBuilderList`], which is
+    /// implemented automatically for `N`-tuples, [`Vec<T>`] and arrays.
+    ///
+    /// can only be set once.
+    ///
+    /// NOTE: if using vecs or arrays, call [`UiBuilder::done`] in order to obtain the [`hecs::EntityBuilder`] for each element
+    /// in order to store it.
     pub fn children(
         mut self,
         children: impl IntoUiBuilderList,
     ) -> UiBuilder<W, impl ui_builder::State> {
         let children = children.into_list().into_iter().collect::<Box<[_]>>();
         self.builder.add(ChildrenBuilders(children));
-        self
+        self.children_flag(())
     }
+}
 
+impl<W, S> UiBuilder<W, S>
+where
+    S: ui_builder::State,
+    S::Children: ui_builder::IsUnset,
+    S::Child: ui_builder::IsUnset,
+    W: ElWidget,
+{
+    /// like [`UiBuilder::child`], but only takes one child.
+    ///
+    /// can only be set once.
+    ///
+    /// this method exists as a convenience so you don't have to do `.children((child,))` with a 1-tuple.
     pub fn child(
         mut self,
         child: impl Into<EntityBuilder>,
     ) -> UiBuilder<W, impl ui_builder::State> {
         self.builder.add(ChildrenBuilders(Box::new([child.into()])));
-        self
+        self.child_flag(())
     }
+}
 
-    pub fn with(mut self, bundle: impl DynamicBundle) -> UiBuilder<W, impl ui_builder::State> {
+impl<W, S> UiBuilder<W, S>
+where
+    S: ui_builder::State,
+    W: ElWidget,
+{
+    /// adds the dynamic bundle to the elments components.
+    ///
+    /// this method can be set repeatedly. if the element already contained some of the bundle's components,
+    /// they will be replaced.
+    ///
+    /// # Example
+    /// ```
+    /// # use ratatui::widgets::Block;
+    /// # use mana_tui_elemental::ui::*;
+    /// # use mana_tui_elemental::prelude::*;
+    ///
+    /// ui(Block::new())
+    ///     .with((
+    ///         Width(Size::Grow),
+    ///         Height(Size::Fixed(40)),
+    ///         Padding::uniform(1),
+    ///     ));
+    /// ```
+    pub fn with(
+        mut self,
+        bundle: impl DynamicBundle,
+    ) -> UiBuilder<W, impl ui_builder::State<Children = S::Children, Child = S::Child>> {
         self.builder.add_bundle(bundle);
         self
     }
@@ -120,7 +248,11 @@ where
     }
 }
 
+/// trait that marks a type can be converted into an iterator over [`hecs::EntityBuilder`].
+///
+/// automatically implemented for N-tuples, vecs and arrays.
 pub trait IntoUiBuilderList {
+    /// convert into iterator.
     fn into_list(self) -> impl IntoIterator<Item = EntityBuilder>;
 }
 
@@ -202,6 +334,12 @@ fn process_ui_system(world: &mut ElementCtx) {
 }
 
 impl ElementCtx {
+    /// spawns the root element along with its children.
+    ///
+    /// use this method instead of [`hecs::World::spawn`] as it also spawns all children
+    /// recursively using a queue in `O(n)` time where `n` is the number of elements with children.
+    ///
+    /// also see [`ui`], [`Element`][crate::layout::Element]
     pub fn spawn_ui(&mut self, ui: impl Into<EntityBuilder>) -> Element {
         let mut ui = ui.into();
         let ui = ui.build();

@@ -10,7 +10,6 @@ members = ["mana-tui-elemental", "mana-tui-macros"]
 
 [workspace.lints.clippy]
 pedantic = "warn"
-missing-docs = { level = "deny", priority = 1 }
 
 [workspace.dependencies]
 mana-tui-elemental.path = "./mana-tui-elemental"

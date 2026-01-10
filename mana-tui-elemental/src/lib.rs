@@ -2,12 +2,7 @@
 //!
 //! ratatui layout library
 
-// #![forbid(missing_docs)]
-#![feature(negative_impls)]
-#![feature(alloc_layout_extra)]
-#![feature(ptr_as_ref_unchecked)]
-#![feature(downcast_unchecked)]
-
+#![forbid(missing_docs)]
 pub mod layout;
 pub mod prelude;
 pub mod ui;
@@ -123,7 +118,7 @@ mod tests {
     fn test_list_justify() {
         _ = tracing_subscriber::fmt::try_init();
         for justify in Justify::iter() {
-            let mut buf = Buffer::empty(Rect::new(0, 0, 50, 20));
+            let mut buf = Buffer::empty(Rect::new(0, 0, 50, 6));
             let mut ctx = ElementCtx::default();
             let root = block()
                 .rounded()
@@ -131,16 +126,17 @@ mod tests {
                 .fg(Color::Red)
                 .commit()
                 .width(Size::Fixed(24))
-                .height(Size::Fixed(20))
+                .direction(Direction::Horizontal)
+                .height(Size::Fixed(5))
                 .children(
                     (0..3)
                         .map(|idx| {
                             block()
                                 .rounded()
                                 .commit()
-                                .text(format!("child #{idx}"))
+                                .text(format!("#{idx}"))
                                 .commit_text(&mut ctx)
-                                .width(Size::Grow)
+                                .width(Size::Fixed(4))
                                 .height(Size::Fixed(3))
                                 .create(&mut ctx)
                         })
@@ -152,6 +148,32 @@ mod tests {
             ctx.render(root, buf.area, &mut buf);
             tracing::info!("\ntest_list_justify\n{}", buffer_to_string(&buf));
         }
+    }
+
+    #[test]
+    fn test_gap() {
+        _ = tracing_subscriber::fmt::try_init();
+        _ = color_eyre::install();
+        let mut ctx = ElementCtx::new();
+        let block = || Block::bordered().border_type(BorderType::Rounded);
+        let root = ui(block().title_top("parent"))
+            .with((
+                Width(Size::Fit),
+                Height(Size::Fit),
+                Direction::Horizontal,
+                Padding::uniform(1),
+                Gap(2),
+            ))
+            .children((
+                ui(block()).with((Width(Size::Fixed(4)), Height(Size::Fixed(3)))),
+                ui(block()).with((Width(Size::Fixed(4)), Height(Size::Fixed(3)))),
+                ui(block()).with((Width(Size::Fixed(4)), Height(Size::Fixed(3)))),
+            ));
+        let root = ctx.spawn_ui(root);
+        ctx.calculate_layout(root).unwrap();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
+        ctx.render(root, buf.area, &mut buf);
+        tracing::info!("\ntest_gap\n{}", buffer_to_string(&buf));
     }
 
     #[test]
