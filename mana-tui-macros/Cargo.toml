@@ -7,11 +7,9 @@ edition = "2024"
 proc-macro = true
 
 [dependencies]
-itertools = "0.14.0"
 proc-macro2 = "1.0.105"
-slab = "0.4.11"
-bon = { workspace = true, features = ["experimental-overwritable"] }
-unsynn = "0.3.0"
+syn = { version = "2.0.114", features = ["full", "extra-traits"] }
+quote = "1.0.43"
 
 [dev-dependencies]
 mana-tui-elemental.workspace = true

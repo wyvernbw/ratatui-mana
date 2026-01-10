@@ -10,16 +10,16 @@ use std::sync::Arc;
 
 pub use crate::layout::TuiElMarker;
 use glam::U16Vec2;
-use ratatui::{
-    buffer::Buffer,
-    layout::{Direction, Rect},
-    text::Text,
-    widgets::{Block, BorderType, Borders, Padding, Paragraph},
-};
+use ratatui::{buffer::Buffer, layout::Rect};
 
 use crate::layout::Props;
 pub use crate::layout::{
     Children, ElWidget, Element, ElementCtx, Gap, Height, Justify, MainJustify, Size, Width,
+};
+pub use ratatui::{
+    layout::Direction,
+    text::Text,
+    widgets::{Block, BorderType, Borders, Padding, Paragraph},
 };
 
 pub use crate::ui::*;

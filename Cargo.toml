@@ -16,16 +16,7 @@ mana-tui-elemental.path = "./mana-tui-elemental"
 mana-tui-macros.path = "./mana-tui-macros"
 bon = "3.8.1"
 ratatui = "0.30.0"
-smol = "2.0.2"
 derive_more = { version = "2.1.0", features = ["full"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 tracing = "0.1.44"
 
-[dependencies]
-bon.workspace = true
-ratatui.workspace = true
-smol.workspace = true
-derive_more.workspace = true
-crossterm.workspace = true
-tailcall = "1.0.1"
-im = "15.1.0"

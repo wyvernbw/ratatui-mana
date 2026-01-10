@@ -9,63 +9,16 @@ pub mod ui;
 
 #[cfg(test)]
 mod tests {
-    use hecs::World;
-    use ratatui::{
-        buffer::Buffer,
-        layout::{Direction, Rect},
-        style::{Color, Stylize},
-        widgets::{Block, BorderType, Padding, Paragraph},
-    };
-
     use crate::prelude::*;
-    use crate::{
-        layout::{ElementCtx, Justify, Size},
-        prelude::{BlockExt, block, element},
-    };
+    use hecs::World;
+    use mana_tui_macros::ui;
+    use ratatui::{buffer::Buffer, layout::Rect};
 
     fn buffer_to_string(buf: &Buffer) -> String {
         buf.content()
             .chunks(buf.area.width as usize)
             .flat_map(|line| line.iter().map(|cell| cell.symbol()).chain(["\n"]))
             .collect()
-    }
-
-    #[test]
-    fn test_fixed_size_with_children() {
-        _ = tracing_subscriber::fmt::try_init();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 10));
-        let mut ctx = ElementCtx::default();
-        let root = block()
-            .rounded()
-            .title_top("parent")
-            .fg(Color::Red)
-            .commit()
-            .children(vec![
-                block()
-                    .rounded()
-                    .title_top("child #0".to_string())
-                    .commit()
-                    .width(Size::Fixed(10))
-                    .height(Size::Fixed(3))
-                    .create(&mut ctx),
-                block()
-                    .rounded()
-                    .title_top("child #1".to_string())
-                    .commit()
-                    .width(Size::Fixed(14))
-                    .height(Size::Fixed(3))
-                    .create(&mut ctx),
-            ])
-            .width(Size::Fixed(24))
-            .height(Size::Fixed(8))
-            .create(&mut ctx);
-
-        ctx.calculate_layout(root).unwrap();
-        ctx.render(root, buf.area, &mut buf);
-        tracing::info!(
-            "\ntest_fixed_size_with_children\n{}",
-            buffer_to_string(&buf)
-        );
     }
 
     #[test]
@@ -115,60 +68,17 @@ mod tests {
     }
 
     #[test]
-    fn test_list_justify() {
-        _ = tracing_subscriber::fmt::try_init();
-        for justify in Justify::iter() {
-            let mut buf = Buffer::empty(Rect::new(0, 0, 50, 6));
-            let mut ctx = ElementCtx::default();
-            let root = block()
-                .rounded()
-                .title_top(format!("{justify:?}"))
-                .fg(Color::Red)
-                .commit()
-                .width(Size::Fixed(24))
-                .direction(Direction::Horizontal)
-                .height(Size::Fixed(5))
-                .children(
-                    (0..3)
-                        .map(|idx| {
-                            block()
-                                .rounded()
-                                .commit()
-                                .text(format!("#{idx}"))
-                                .commit_text(&mut ctx)
-                                .width(Size::Fixed(4))
-                                .height(Size::Fixed(3))
-                                .create(&mut ctx)
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .main_justify(justify)
-                .create(&mut ctx);
-            ctx.calculate_layout(root).unwrap();
-            ctx.render(root, buf.area, &mut buf);
-            tracing::info!("\ntest_list_justify\n{}", buffer_to_string(&buf));
-        }
-    }
-
-    #[test]
     fn test_gap() {
         _ = tracing_subscriber::fmt::try_init();
         _ = color_eyre::install();
         let mut ctx = ElementCtx::new();
-        let block = || Block::bordered().border_type(BorderType::Rounded);
-        let root = ui(block().title_top("parent"))
-            .with((
-                Width(Size::Fit),
-                Height(Size::Fit),
-                Direction::Horizontal,
-                Padding::uniform(1),
-                Gap(2),
-            ))
-            .children((
-                ui(block()).with((Width(Size::Fixed(4)), Height(Size::Fixed(3)))),
-                ui(block()).with((Width(Size::Fixed(4)), Height(Size::Fixed(3)))),
-                ui(block()).with((Width(Size::Fixed(4)), Height(Size::Fixed(3)))),
-            ));
+        let root = ui! {
+            <Block .title_top="parent" Width(Size::Fit) Height(Size::Fit) Direction::Horizontal Padding::uniform(1) Gap(2)>
+                <Block Width(Size::Fixed(4)) Height(Size::Fixed(3)) />
+                <Block Width(Size::Fixed(4)) Height(Size::Fixed(3)) />
+                <Block Width(Size::Fixed(4)) Height(Size::Fixed(3)) />
+            </Block>
+        };
         let root = ctx.spawn_ui(root);
         ctx.calculate_layout(root).unwrap();
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));

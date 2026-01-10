@@ -175,6 +175,7 @@ where
     ///
     /// NOTE: if using vecs or arrays, call [`UiBuilder::done`] in order to obtain the [`hecs::EntityBuilder`] for each element
     /// in order to store it.
+    #[must_use = "You can use the builder with ElementCtx::spawn_ui"]
     pub fn children(
         mut self,
         children: impl IntoUiBuilderList,
@@ -197,6 +198,7 @@ where
     /// can only be set once.
     ///
     /// this method exists as a convenience so you don't have to do `.children((child,))` with a 1-tuple.
+    #[must_use = "You can use the builder with ElementCtx::spawn_ui"]
     pub fn child(
         mut self,
         child: impl Into<EntityBuilder>,
@@ -229,6 +231,7 @@ where
     ///         Padding::uniform(1),
     ///     ));
     /// ```
+    #[must_use = "You can use the builder with ElementCtx::spawn_ui"]
     pub fn with(
         mut self,
         bundle: impl DynamicBundle,
