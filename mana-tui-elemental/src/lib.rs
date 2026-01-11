@@ -3,6 +3,7 @@
 //! ratatui layout library
 
 #![forbid(missing_docs)]
+#![cfg_attr(feature = "nightly", feature(trait_alias))]
 
 extern crate self as mana_tui_elemental;
 
@@ -108,12 +109,13 @@ mod tests {
         fn numbered_box(idx: i32) -> View {
             ui! {
                 <Block .rounded Width::fixed(4) Height::fixed(3)>
-                    { format!("{idx:02}") }
+                    // formatting out of the box :)
+                    "{idx:02}"
                 </Block>
             }
         }
         #[subview]
-        fn container(justify: Justify) -> View {
+        fn container(justify: Justify, children: impl AsChildren) -> View {
             ui! {
                 <Block
                     .title_top={format!("{justify:?}")}
@@ -123,6 +125,7 @@ mod tests {
                     Height::fixed(5)
                     Direction::Horizontal
                 >
+                    {children}
                 </Block>
             }
         }
@@ -133,11 +136,14 @@ mod tests {
                 {
                     Justify::iter().map(|justify|
                         ui! {
-                            <Container .justify={justify}>
-                                { (0..3).map(|idx| ui!{
-                                    <NumberedBox .idx={idx} />
-                                }) }
-                            </Container>
+                            <Container
+                                .justify={justify}
+                                .children={
+                                    (0..3).map(|idx| ui!{
+                                        <NumberedBox .idx={idx} />
+                                    })
+                                }
+                            />
                         }
                     )
                 }
@@ -147,8 +153,42 @@ mod tests {
         let root = ctx.spawn_ui(root());
         ctx.calculate_layout(root).unwrap();
 
-        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 32));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 24, 30));
         ctx.render(root, buf.area, &mut buf);
+        let expected = Buffer::with_lines(vec![
+            "╭Start─────────────────╮",
+            "│╭──╮╭──╮╭──╮          │",
+            "││00││01││02│          │",
+            "│╰──╯╰──╯╰──╯          │",
+            "╰──────────────────────╯",
+            "╭Center────────────────╮",
+            "│     ╭──╮╭──╮╭──╮     │",
+            "│     │00││01││02│     │",
+            "│     ╰──╯╰──╯╰──╯     │",
+            "╰──────────────────────╯",
+            "╭SpaceBetween──────────╮",
+            "│╭──╮     ╭──╮     ╭──╮│",
+            "││00│     │01│     │02││",
+            "│╰──╯     ╰──╯     ╰──╯│",
+            "╰──────────────────────╯",
+            "╭SpaceAround───────────╮",
+            "│ ╭──╮   ╭──╮   ╭──╮   │",
+            "│ │00│   │01│   │02│   │",
+            "│ ╰──╯   ╰──╯   ╰──╯   │",
+            "╰──────────────────────╯",
+            "╭SpaceEvenly───────────╮",
+            "│  ╭──╮  ╭──╮  ╭──╮    │",
+            "│  │00│  │01│  │02│    │",
+            "│  ╰──╯  ╰──╯  ╰──╯    │",
+            "╰──────────────────────╯",
+            "╭End───────────────────╮",
+            "│          ╭──╮╭──╮╭──╮│",
+            "│          │00││01││02││",
+            "│          ╰──╯╰──╯╰──╯│",
+            "╰──────────────────────╯",
+        ]);
+
+        assert_eq!(buf, expected);
         tracing::info!("\ntest_list_justify\n{}", buffer_to_string(&buf));
     }
 

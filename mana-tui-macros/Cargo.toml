@@ -14,7 +14,7 @@ bon.workspace = true
 convert_case = "0.10.0"
 
 [dev-dependencies]
-mana-tui-elemental.workspace = true
+mana-tui-elemental = {workspace = true, features = ["nightly"]}
 ratatui.workspace = true
 
 [lints]

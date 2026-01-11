@@ -4,6 +4,9 @@ version = "0.0.1"
 edition = "2024"
 license = "MIT"
 
+[features]
+nightly = []
+
 [dependencies]
 ratatui.workspace = true
 bon = { workspace = true, features = ["experimental-overwritable"] }

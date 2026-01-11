@@ -22,6 +22,9 @@ pub use ratatui::{
     widgets::{Block, BorderType, Borders, Padding, Paragraph},
 };
 
+#[cfg(feature = "nightly")]
+pub use crate::ui::AsChildren;
+
 pub use crate::ui::{IntoUiBuilderList, IntoView, IteratorMarker, UiBuilder, View, ui};
 
 /// create element builder.

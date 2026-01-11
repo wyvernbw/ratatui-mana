@@ -255,6 +255,9 @@ pub trait IntoUiBuilderList<Marker = ()> {
     /// convert into iterator.
     fn into_list(self) -> impl Iterator<Item = EntityBuilder>;
 }
+/// alias for `IntoUiBuilderList<IteratorMarker>`
+#[cfg(feature = "nightly")]
+pub trait AsChildren = IntoUiBuilderList<IteratorMarker>;
 
 /// internal struct.
 pub struct IteratorMarker;
@@ -291,6 +294,40 @@ impl<'a> IntoUiBuilderList<()> for Cow<'a, str> {
             .with((Width::grow(), Height::grow()))
             .done()]
         .into_iter()
+    }
+}
+
+enum OptionIterator<T> {
+    Some(T),
+    None,
+}
+
+impl<T, U> Iterator for OptionIterator<T>
+where
+    T: Iterator<Item = U>,
+{
+    type Item = U;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            OptionIterator::Some(iter) => iter.next(),
+            OptionIterator::None => None,
+        }
+    }
+}
+
+/// internal marker type.
+pub struct OptionMarker;
+
+impl<T> IntoUiBuilderList<OptionMarker> for Option<T>
+where
+    T: IntoUiBuilderList,
+{
+    fn into_list(self) -> impl Iterator<Item = EntityBuilder> {
+        match self {
+            Some(value) => OptionIterator::Some(value.into_list()),
+            None => OptionIterator::None,
+        }
     }
 }
 

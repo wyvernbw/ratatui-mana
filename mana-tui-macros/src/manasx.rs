@@ -444,7 +444,7 @@ impl quote::ToTokens for ManaElement {
             Self::Plaintext(text) => tokens.extend(quote! {
                 {
                     use ::ratatui::text::Text;
-                    __ui_internal(Text::raw(#text).into_view()).done()
+                    __ui_internal(Text::raw(format!(#text)).into_view()).done()
                 }
             }),
             ManaElement::Element(element) => {
