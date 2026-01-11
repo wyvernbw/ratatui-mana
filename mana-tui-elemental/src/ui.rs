@@ -31,8 +31,8 @@ use ratatui::{
 use tracing::{Level, enabled, instrument};
 
 use crate::layout::{
-    Children, ElWidget, Element, ElementCtx, Gap, Height, Justify, MainJustify, Props, Size,
-    TuiElMarker, Width,
+    Center, Children, CrossJustify, ElWidget, Element, ElementCtx, Gap, Height, MainJustify,
+    ManaComponent, Props, Size, TuiElMarker, Width,
 };
 
 /// create a ui element.
@@ -444,7 +444,10 @@ fn process_ui_system(world: &mut ElementCtx) {
             buffer.insert_one(node, Direction::Vertical);
         }
         if !entity.has::<MainJustify>() {
-            buffer.insert_one(node, MainJustify(Justify::Start));
+            buffer.insert_one(node, MainJustify::Start);
+        }
+        if !entity.has::<CrossJustify>() {
+            buffer.insert_one(node, CrossJustify::Start);
         }
         if !entity.has::<Gap>() {
             buffer.insert_one(node, Gap::default());
@@ -459,6 +462,9 @@ fn process_ui_system(world: &mut ElementCtx) {
     drop(query);
 
     buffer.run_on(world);
+
+    // post processing pass
+    Center::run_postprocess(world, &mut buffer);
 }
 
 impl ElementCtx {

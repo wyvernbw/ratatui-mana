@@ -85,8 +85,8 @@ let root = ui(block().title_top("parent"))
 // in mana-tui, every element or node is an entity in the ECS.
 let root = ctx.spawn_ui(root);
 // calculate the layout
-ctx.calculate_layout(root).unwrap();
 let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
+ctx.calculate_layout(root, buf.area).unwrap();
 // finally render to the buffer
 ctx.render(root, buf.area, &mut buf);
 ```
@@ -136,8 +136,8 @@ let root = ui! {
     </Block>
 };
 let root = ctx.spawn_ui(root);
-ctx.calculate_layout(root).unwrap();
 let mut buf = Buffer::empty(Rect::new(0, 0, 36, 18));
+ctx.calculate_layout(root, buf.area).unwrap();
 ctx.render(root, buf.area, &mut buf);
 
 

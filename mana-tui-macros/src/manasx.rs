@@ -505,21 +505,26 @@ impl quote::ToTokens for ComponentVec {
         if self.0.is_empty() {
             return;
         }
-        let tuple_inner = self
+        let result = self
             .0
             .iter()
             .map(|component| {
                 let Component(c_expr) = component;
-                let tuple_element = quote! {
-                    #c_expr
-                };
-                tuple_element
+                match c_expr {
+                    ComponentExpr::Tuple(c_expr) => {
+                        quote! {
+                            .with(#c_expr)
+                        }
+                    }
+                    _ => {
+                        quote! {
+                            .with((#c_expr,))
+                        }
+                    }
+                }
             })
-            .reduce(|acc, el| quote! {#acc,#el});
-        let fncall = quote! {
-            .with((#tuple_inner,))
-        };
-        tokens.extend(fncall);
+            .reduce(|acc, el| quote! {#acc #el});
+        tokens.extend(result);
     }
 }
 

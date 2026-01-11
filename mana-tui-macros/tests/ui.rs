@@ -9,12 +9,12 @@ fn subview_test(name: &'static str) -> View {
 }
 
 #[subview]
-fn container(justify: Justify, children: impl AsChildren) -> View {
+fn container(justify: MainJustify, children: impl AsChildren) -> View {
     ui! {
         <Block
             .title_top={format!("{justify:?}")}
             .rounded
-            MainJustify(justify)
+            {justify}
             Width::fixed(24)
             Height::fixed(5)
             Direction::Horizontal
@@ -33,7 +33,7 @@ fn test() {
             <Paragraph .alignment={ratatui::layout::HorizontalAlignment::Center}/>
             <SubviewTest .name="there" />
             <Container
-                .justify={Justify::Start}
+                .justify={MainJustify::Start}
                 .children={
                     (0..3).map(|_| ui!{
                         <SubviewTest .name="me" />
@@ -64,12 +64,12 @@ fn test() {
     let _ = ui! {
         <Block>
         {
-            Justify::iter().map(|justify|
+            MainJustify::iter().map(|justify|
                 ui! {
                     <Block
                         .title_top={format!("{justify:?}")}
                         .rounded
-                        MainJustify(justify)
+                        {justify}
                         Width::fixed(24)
                         Height::fixed(5)
                         Direction::Horizontal Padding::uniform(1)
@@ -92,12 +92,12 @@ fn test() {
     let _ = ui! {
         <Block>
         {
-            Justify::iter().map(|justify|
+            MainJustify::iter().map(|justify|
                 ui! {
                     <Block
                         .title_top={format!("{justify:?}")}
                         .rounded
-                        MainJustify(justify)
+                        {justify}
                         Width::fixed(24)
                         Height::fixed(5)
                         Direction::Horizontal

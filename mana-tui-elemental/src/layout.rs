@@ -1,17 +1,19 @@
 //! # Layout
 //!
 //! implements the layout algorithm.
-use std::{ops::Deref, sync::Arc};
+use std::{
+    ops::{Deref, Div},
+    sync::Arc,
+};
 
 use derive_more as d;
 use glam::{U16Vec2, u16vec2};
-use hecs::{Component, ComponentError, Entity, Query, World};
+use hecs::{Bundle, CommandBuffer, Component, ComponentError, DynamicBundle, Entity, Query, World};
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Rect},
     widgets::{Padding, Widget},
 };
-use tracing::instrument;
 
 /// trait for rendering elements through a shared reference. this is automatically implemented
 /// for anything that implements [`Widget`], [`Clone`] and [`Component`]
@@ -50,9 +52,9 @@ where
 /// let root = ui(Text::raw("hello world"));
 /// let root = ctx.spawn_ui(root);
 ///
-/// ctx.calculate_layout(root).unwrap();
-/// // `&mut Buffer` from ratatui
 /// # let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
+/// // `&mut Buffer` from ratatui
+/// ctx.calculate_layout(root, buf.area).unwrap();
 /// ctx.render(root, buf.area, &mut buf);
 /// ```
 ///
@@ -147,23 +149,46 @@ impl ElementCtx {
             .map(|props| props.size)
             .sum::<U16Vec2>()
     }
-    fn calculate_grow_sizes(&self, element: Element) -> Result<(), ComponentError> {
+    fn calculate_grow_sizes(
+        &self,
+        element: Element,
+        is_root: bool,
+        area: Rect,
+    ) -> Result<(), ComponentError> {
         let mut query = self
             .world
             .query_one::<(&mut Props, &Padding, &Children, &Direction, &Gap)>(element)?;
         let (props, &padding, children, &direction, &gap) = query.get().unwrap();
+
         let children = children.clone();
         let inner_size = props.size.saturating_sub(u16vec2(
             padding.right + padding.left,
             padding.bottom + padding.top,
         ));
+
         drop(query);
+
         let space_used = self.sum_space_used(&children);
         let remaining_size = inner_size.saturating_sub(space_used);
         let mut remaining_size = axify(remaining_size, direction);
         remaining_size.main_axis = remaining_size
             .main_axis
             .saturating_sub(children.len().saturating_sub(1) as u16 * *gap);
+
+        if is_root {
+            let mut query = self
+                .world
+                .query_one::<(&mut Props, &Width, &Height)>(element)?;
+            let (props, width, height) = query.get().unwrap();
+            // if the root element is set to grow, we want it to take up the entire
+            // screen.
+            if width.is_grow() {
+                props.size.x = area.width;
+            }
+            if height.is_grow() {
+                props.size.y = area.height;
+            }
+        }
 
         // cross axis
         children
@@ -265,21 +290,30 @@ impl ElementCtx {
         }
 
         for child in children.iter() {
-            self.calculate_grow_sizes(child)?;
+            self.calculate_grow_sizes(child, false, area)?;
         }
 
         Ok(())
     }
     fn calculate_positions(&self, root: Element) -> Result<(), ComponentError> {
-        let mut query = self
-            .world
-            .query_one::<(&Props, &Padding, &Children, &Direction, &Gap, &MainJustify)>(root)?;
-        let (&props, &padding, children, &dir, &gap, &main_justify) = query.get().unwrap();
+        let mut query = self.world.query_one::<(
+            &Props,
+            &Padding,
+            &Children,
+            &Direction,
+            &Gap,
+            &MainJustify,
+            &CrossJustify,
+        )>(root)?;
+        let (&props, &padding, children, &dir, &gap, &main_justify, &cross_justify) =
+            query.get().unwrap();
         let children = children.clone();
         drop(query);
         let space_used = self.sum_space_used(&children);
         let space_used = axify(space_used, dir).main_axis;
         let space_used = space_used + *gap * children.len().saturating_sub(1) as u16;
+        let inner_size =
+            props.size - u16vec2(padding.left + padding.right, padding.top + padding.bottom);
         let remaining_size = axify(props.size, dir)
             .shrink(padding, dir)
             .main_axis
@@ -304,15 +338,15 @@ impl ElementCtx {
             }
         }
 
-        let mut align = match *main_justify {
-            Justify::Start => AlignValues::default(),
-            Justify::Center => AlignValues {
+        let mut align = match main_justify {
+            MainJustify::Start => AlignValues::default(),
+            MainJustify::Center => AlignValues {
                 start: remaining_size / 2,
                 inbetween: 0,
                 remainder: 0,
             },
-            Justify::SpaceBetween if children.is_empty() => AlignValues::default(),
-            Justify::SpaceBetween => {
+            MainJustify::SpaceBetween if children.is_empty() => AlignValues::default(),
+            MainJustify::SpaceBetween => {
                 let div_by = (children.len().saturating_sub(1)) as u16;
                 let space = remaining_size / div_by;
                 let space_rem = remaining_size % div_by;
@@ -322,8 +356,8 @@ impl ElementCtx {
                     remainder: space_rem,
                 }
             }
-            Justify::SpaceAround if children.is_empty() => AlignValues::default(),
-            Justify::SpaceAround => {
+            MainJustify::SpaceAround if children.is_empty() => AlignValues::default(),
+            MainJustify::SpaceAround => {
                 let div_by = (children.len() * 2) as u16;
                 let space = remaining_size / div_by;
                 let space_rem = remaining_size % div_by;
@@ -333,8 +367,8 @@ impl ElementCtx {
                     remainder: space_rem,
                 }
             }
-            Justify::SpaceEvenly if children.is_empty() => AlignValues::default(),
-            Justify::SpaceEvenly => {
+            MainJustify::SpaceEvenly if children.is_empty() => AlignValues::default(),
+            MainJustify::SpaceEvenly => {
                 let div_by = (children.len() * 2) as u16 + 2;
                 let space = remaining_size / div_by;
                 AlignValues {
@@ -343,7 +377,7 @@ impl ElementCtx {
                     remainder: 0,
                 }
             }
-            Justify::End => AlignValues {
+            MainJustify::End => AlignValues {
                 start: remaining_size,
                 inbetween: 0,
                 remainder: 0,
@@ -362,6 +396,25 @@ impl ElementCtx {
                     }
                     child_props.position += u16vec2(padding.left, padding.top);
                     align.start = increase_axis(align.start, dir, child_props.size);
+                    match (cross_justify, dir) {
+                        (CrossJustify::Start, _) => {}
+                        (CrossJustify::Center, Direction::Horizontal) => {
+                            child_props.position.y +=
+                                inner_size.y.saturating_sub(child_props.size.y).div(2);
+                        }
+                        (CrossJustify::Center, Direction::Vertical) => {
+                            child_props.position.x +=
+                                inner_size.x.saturating_sub(child_props.size.x).div(2);
+                        }
+                        (CrossJustify::End, Direction::Horizontal) => {
+                            child_props.position.y +=
+                                inner_size.y.saturating_sub(child_props.size.y);
+                        }
+                        (CrossJustify::End, Direction::Vertical) => {
+                            child_props.position.x +=
+                                inner_size.x.saturating_sub(child_props.size.x);
+                        }
+                    }
                     align.start += *gap + align.inbetween + align.tick_rem();
                 }
                 self.calculate_positions(child)?;
@@ -376,9 +429,9 @@ impl ElementCtx {
     ///
     /// this will error if any element index is invalid. this can only happen if you manually despawn
     /// entities using [`hecs::World::despawn`] or other such methods.
-    pub fn calculate_layout(&mut self, element: Element) -> Result<(), ComponentError> {
+    pub fn calculate_layout(&mut self, element: Element, area: Rect) -> Result<(), ComponentError> {
         self.calculate_fit_sizes(element)?;
-        self.calculate_grow_sizes(element)?;
+        self.calculate_grow_sizes(element, true, area)?;
         self.calculate_positions(element)?;
         Ok(())
     }
@@ -578,11 +631,6 @@ impl_sizing_functions!(Height);
 #[derive(Debug, Clone, Copy, Default, d::Deref)]
 pub struct Gap(pub u16);
 
-/// defines the alignment on the main axis. see [`Justify`] for more details.
-/// defaults to: [`Justify::Start`]
-#[derive(Debug, Clone, Copy, Default, d::Deref)]
-pub struct MainJustify(pub Justify);
-
 /// holds a list of entity ids to the element's children. this component is added automatically.
 /// you can use this to iterate the children of an element like this
 ///
@@ -678,41 +726,41 @@ pub enum Size {
     Grow,
 }
 
-/// defines the alignment strategy.
-#[derive(Default, Clone, Copy, Debug)]
-pub enum Justify {
+/// defines the alignment strategy on the main axis.
+#[derive(Default, Clone, Copy, Debug, strum::EnumIter)]
+pub enum MainJustify {
     /// aligns the items toward the start of the container.
     ///
-    /// ## Main axis
-    ///
+    /// ```plaintext
     /// ╭Start─────────────────╮
     /// │╭──╮╭──╮╭──╮          │
     /// ││#0││#1││#2│          │
     /// │╰──╯╰──╯╰──╯          │
     /// ╰──────────────────────╯
+    /// ```
     #[default]
     Start,
 
     /// centers the items.
     ///
-    /// ## Main axis
-    ///
+    /// ```plaintext
     /// ╭Center────────────────╮
     /// │     ╭──╮╭──╮╭──╮     │
     /// │     │#0││#1││#2│     │
     /// │     ╰──╯╰──╯╰──╯     │
     /// ╰──────────────────────╯
+    /// ```
     Center,
 
     /// distributes the remaining space evenly between elements. inserts as much space between the elments as possible
     ///
-    /// # Main axis
-    ///
+    /// ```plaintext
     /// ╭SpaceBetween──────────╮
     /// │╭──╮     ╭──╮     ╭──╮│
     /// ││#0│     │#1│     │#2││
     /// │╰──╯     ╰──╯     ╰──╯│
     /// ╰──────────────────────╯
+    /// ```
     SpaceBetween,
 
     /// distributes the remaining space evenly between elements such that there is an equal amount of space before
@@ -720,13 +768,13 @@ pub enum Justify {
     ///
     /// NOTE: this mode usually has poor results on small containers due to rounding issues.
     ///
-    /// # Main axis
-    ///
+    /// ```plaintext
     /// ╭SpaceAround───────────╮
     /// │ ╭──╮   ╭──╮   ╭──╮   │
     /// │ │#0│   │#1│   │#2│   │
     /// │ ╰──╯   ╰──╯   ╰──╯   │
     /// ╰──────────────────────╯
+    /// ```
     SpaceAround,
 
     /// distributes the remaining space evenly between elements such that there is an equal amount of on each side of each item,
@@ -734,39 +782,56 @@ pub enum Justify {
     ///
     /// NOTE: this mode usually has poor results on small containers due to rounding issues.
     ///
-    /// # Main axis
-    ///
+    /// ```plaintext
     /// ╭SpaceEvenly───────────╮
     /// │  ╭──╮  ╭──╮  ╭──╮    │
     /// │  │#0│  │#1│  │#2│    │
     /// │  ╰──╯  ╰──╯  ╰──╯    │
     /// ╰──────────────────────╯
+    /// ```
     SpaceEvenly,
 
     /// aligns the items toward the end of the container.
     ///
-    /// ## Main axis
-    ///
+    /// ```plaintext
     /// ╭End───────────────────╮
     /// │          ╭──╮╭──╮╭──╮│
     /// │          │#0││#1││#2││
     /// │          ╰──╯╰──╯╰──╯│
     /// ╰──────────────────────╯
+    /// ```
     End,
 }
 
-impl Justify {
-    /// iterates over every variant of justify.
-    pub fn iter() -> impl Iterator<Item = Justify> {
-        [
-            Self::Start,
-            Self::Center,
-            Self::SpaceBetween,
-            Self::SpaceAround,
-            Self::SpaceEvenly,
-            Self::End,
-        ]
-        .into_iter()
+#[derive(Default, Clone, Copy, Debug, strum::EnumIter)]
+/// defines the alignment strategy on the cross axis.
+pub enum CrossJustify {
+    /// aligns the items toward the start of the container.
+    #[default]
+    Start,
+    /// centers the items.
+    Center,
+    /// aligns the items toward the end of the container.
+    End,
+}
+
+pub(crate) trait ManaComponent {
+    fn run_postprocess(ctx: &mut ElementCtx, commands: &mut CommandBuffer);
+}
+
+/// equivalent to a `(MainJustify::Center, CrossJustify::Center)` bundle. this will make a container
+/// center its children.
+pub struct Center;
+
+impl ManaComponent for Center {
+    fn run_postprocess(ctx: &mut ElementCtx, _: &mut CommandBuffer) {
+        // do not use the shared buffer
+        let mut commands = CommandBuffer::new();
+        for (node, _) in ctx.query_mut::<&Center>() {
+            commands.insert_one(node, MainJustify::Center);
+            commands.insert_one(node, CrossJustify::Center);
+        }
+        commands.run_on(ctx);
     }
 }
 

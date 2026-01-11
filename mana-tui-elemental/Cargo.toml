@@ -14,6 +14,7 @@ derive_more.workspace = true
 tracing.workspace = true
 hecs.workspace = true
 glam = "0.30.9"
+strum = { version = "0.27.2", features = ["derive"] }
 
 [dev-dependencies]
 mana-tui = { path = "..", features = ["nightly", "macros"] }

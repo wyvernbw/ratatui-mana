@@ -55,8 +55,9 @@ mod tests {
                     )),
             ));
         let root = ctx.spawn_ui(root);
-        ctx.calculate_layout(root).unwrap();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
+        let area = Rect::new(0, 0, 50, 24);
+        ctx.calculate_layout(root, area).unwrap();
+        let mut buf = Buffer::empty(area);
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_grow_2\n{}", buffer_to_string(&buf));
     }
@@ -95,8 +96,8 @@ mod tests {
             </Block>
         };
         let root = ctx.spawn_ui(root);
-        ctx.calculate_layout(root).unwrap();
         let mut buf = Buffer::empty(Rect::new(0, 0, 36, 18));
+        ctx.calculate_layout(root, buf.area).unwrap();
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_grow_3\n{}", buffer_to_string(&buf));
 
@@ -144,8 +145,8 @@ mod tests {
         };
         let root = ctx.spawn_ui(root);
 
-        ctx.calculate_layout(root).unwrap();
         let mut buf = Buffer::empty(Rect::new(0, 0, 24, 6));
+        ctx.calculate_layout(root, buf.area).unwrap();
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_gap\n{}", buffer_to_string(&buf));
     }
@@ -167,12 +168,12 @@ mod tests {
             }
         }
         #[subview]
-        fn container(justify: Justify, children: impl AsChildren) -> View {
+        fn container(justify: MainJustify, children: impl AsChildren) -> View {
             ui! {
                 <Block
                     .title_top={format!("{justify:?}")}
                     .rounded
-                    MainJustify(justify)
+                    {justify}
                     Width::fixed(24)
                     Height::fixed(5)
                     Direction::Horizontal
@@ -186,7 +187,7 @@ mod tests {
             ui! {
                 <Block>
                 {
-                    Justify::iter().map(|justify|
+                    MainJustify::iter().map(|justify|
                         ui! {
                             <Container
                                 .justify={justify}
@@ -203,9 +204,8 @@ mod tests {
             }
         }
         let root = ctx.spawn_ui(root());
-        ctx.calculate_layout(root).unwrap();
-
         let mut buf = Buffer::empty(Rect::new(0, 0, 24, 30));
+        ctx.calculate_layout(root, buf.area).unwrap();
         ctx.render(root, buf.area, &mut buf);
         let expected = Buffer::with_lines(vec![
             "╭Start─────────────────╮",
