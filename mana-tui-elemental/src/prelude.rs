@@ -19,6 +19,7 @@ pub use crate::layout::{
 pub use ratatui::{
     layout::Direction,
     text::Text,
+    widgets::*,
     widgets::{Block, BorderType, Borders, Padding, Paragraph},
 };
 

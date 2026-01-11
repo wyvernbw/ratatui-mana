@@ -12,8 +12,8 @@ ratatui.workspace = true
 bon = { workspace = true, features = ["experimental-overwritable"] }
 derive_more.workspace = true
 tracing.workspace = true
+hecs.workspace = true
 glam = "0.30.9"
-hecs = { version = "0.10.5", features = ["macros"] }
 
 [dev-dependencies]
 mana-tui-macros.workspace = true

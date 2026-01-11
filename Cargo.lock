@@ -742,7 +742,11 @@ dependencies = [
 name = "mana-tui"
 version = "0.0.1"
 dependencies = [
+ "bon",
+ "hecs",
  "mana-tui-elemental",
+ "mana-tui-macros",
+ "ratatui",
 ]
 
 [[package]]

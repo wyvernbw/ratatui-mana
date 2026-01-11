@@ -13,7 +13,7 @@ mod tests {
     use crate::prelude::*;
     use hecs::World;
     use mana_tui_macros::{subview, ui};
-    use ratatui::{buffer::Buffer, layout::Rect};
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::Wrap};
 
     fn buffer_to_string(buf: &Buffer) -> String {
         buf.content()
@@ -30,35 +30,29 @@ mod tests {
         let block = || Block::bordered().border_type(BorderType::Rounded);
         let root = ui(block().title_top("parent"))
             .with((
-                Width(Size::Fixed(36)),
-                Height(Size::Fixed(18)),
+                Width::fixed(36),
+                Height::fixed(18),
                 Direction::Horizontal,
                 Padding::uniform(1),
             ))
             .children((
                 ui(block().title_top("sidebar"))
-                    .with((
-                        Width(Size::Fixed(10)),
-                        Height(Size::Grow),
-                        Padding::uniform(1),
-                    ))
+                    .with((Width::fixed(10), Height::grow(), Padding::uniform(1)))
                     .child(ui(Paragraph::new(
                         "this sidebar is so amazing it can have long text that wraps around",
                     )
                     .wrap(ratatui::widgets::Wrap { trim: false }))),
                 ui(block().title_top("child #1"))
                     .with((
-                        Width(Size::Grow),
-                        Height(Size::Grow),
+                        Width::grow(),
+                        Height::grow(),
                         Padding::uniform(1),
                         Gap(1),
                         Direction::Vertical,
                     ))
                     .children((
-                        ui(block().title_top("child #2"))
-                            .with((Width(Size::Grow), Height(Size::Grow))),
-                        ui(block().title_top("child #3"))
-                            .with((Width(Size::Grow), Height(Size::Grow))),
+                        ui(block().title_top("child #2")).with((Width::grow(), Height::grow())),
+                        ui(block().title_top("child #3")).with((Width::grow(), Height::grow())),
                     )),
             ));
         let root = ctx.spawn_ui(root);
@@ -66,6 +60,68 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 50, 24));
         ctx.render(root, buf.area, &mut buf);
         tracing::info!("\ntest_grow_2\n{}", buffer_to_string(&buf));
+    }
+
+    #[test]
+    fn test_grow_3() {
+        _ = tracing_subscriber::fmt::try_init();
+        _ = color_eyre::install();
+        let mut ctx = ElementCtx::new();
+
+        #[subview]
+        fn sidebar() -> View {
+            let value = "i am formatted";
+            ui! {
+                <Block .rounded .title_top="sidebar" Width::fixed(10) Height::grow()>
+                    <Paragraph .wrap={Wrap::default()}>
+                        "this sidebar is so amazing it can have long text that wraps around
+                        and formatting arguments {value}"
+                    </Paragraph>
+                </Block>
+            }
+        }
+
+        let root = ui! {
+            <Block
+                .rounded .title_top="parent"
+                Width::fixed(36) Height::fixed(18) Direction::Horizontal Padding::uniform(1)
+            >
+                <Sidebar />
+                <Block .rounded .title_top="child #1"
+                    Width::grow() Height::grow() Padding::uniform(1) Gap(1) Direction::Vertical
+                >
+                    <Block .rounded .title_top="child #2" Width::grow() Height::grow()/>
+                    <Block .rounded .title_top="child #3" Width::grow() Height::grow()/>
+                </Block>
+            </Block>
+        };
+        let root = ctx.spawn_ui(root);
+        ctx.calculate_layout(root).unwrap();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 36, 18));
+        ctx.render(root, buf.area, &mut buf);
+        tracing::info!("\ntest_grow_3\n{}", buffer_to_string(&buf));
+
+        let expected = Buffer::with_lines(vec![
+            "╭parent────────────────────────────╮",
+            "│╭sidebar─╮╭child #1──────────────╮│",
+            "││        ││╭child #2────────────╮││",
+            "││        │││                    │││",
+            "││        │││                    │││",
+            "││        │││                    │││",
+            "││        │││                    │││",
+            "││        │││                    │││",
+            "││        ││╰────────────────────╯││",
+            "││        ││                      ││",
+            "││        ││╭child #3────────────╮││",
+            "││        │││                    │││",
+            "││        │││                    │││",
+            "││        │││                    │││",
+            "││        │││                    │││",
+            "││        ││╰────────────────────╯││",
+            "│╰────────╯╰──────────────────────╯│",
+            "╰──────────────────────────────────╯",
+        ]);
+        assert_eq!(buf, expected);
     }
 
     #[test]
