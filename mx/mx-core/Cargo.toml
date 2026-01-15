@@ -1,0 +1,18 @@
+[package]
+name = "mx-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui.workspace = true 
+clap = { version = "4.5.54", features = ["derive"] }
+dlhn = { git = "https://github.com/otake84/dlhn.git", branch = "fix/deserialize-string", version = "0.1.6" }
+serde = { version = "1.0.228", features = ["rc"] }
+tracing.workspace = true
+tracing-serde = "0.2.0"
+tracing-subscriber = { workspace = true, features = ["env-filter", "serde"] }
+color-eyre = "0.6.5"
+
+[dependencies.flume]
+version = "0.12.0"
+default-features = false

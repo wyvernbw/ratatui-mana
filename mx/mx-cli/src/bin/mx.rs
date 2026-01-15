@@ -9,19 +9,20 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use clap::Parser;
 use color_eyre::{Result, eyre::eyre};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use flume::Receiver;
 use flume::Sender;
+use mx_core::RenderMsg;
+use mx_core::args;
+use mx_core::logging::DevServerLogCollector;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use ratatui::crossterm;
-use ratatui::crossterm::ExecutableCommand;
-use ratatui::crossterm::terminal::EnableLineWrap;
 use ratatui::layout::Constraint;
 use ratatui::layout::Direction;
 use ratatui::layout::Flex;
 use ratatui::layout::Layout;
+use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::Block;
@@ -39,18 +40,15 @@ use tachyonfx::pattern::SweepPattern;
 use terminput::Encoding;
 use terminput::KittyFlags;
 use terminput_crossterm::to_terminput;
+use tracing::Level;
 use tracing::instrument;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tui_term::vt100;
 use tui_term::widget::PseudoTerminal;
 
-mod args;
-mod logging;
-
-use crate::args::MxArgs;
-use crate::logging::RatatuiLayer;
-use crate::logging::Trace;
+use mx_core::args::MxArgs;
+use mx_core::logging::RatatuiLayer;
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -121,13 +119,6 @@ impl EffectExt for Option<Effect> {
 }
 
 #[derive(Debug, Clone)]
-pub enum RenderMsg {
-    Log(Trace),
-    Draw,
-    Quit,
-}
-
-#[derive(Debug, Clone)]
 pub enum ParserMsg {
     SetSize(u16, u16),
     Read(Box<[u8]>, usize),
@@ -139,7 +130,7 @@ type Chan<T> = (Sender<T>, Receiver<T>);
 
 enum RendererAction {
     ShouldQuit,
-    ShouldRender(vt100::Screen),
+    ShouldRender(Box<vt100::Screen>),
     Idle,
 }
 
@@ -157,9 +148,12 @@ impl App {
     }
 
     /// Run the application's main loop.
+    #[instrument(skip_all)]
     pub fn run(self, mut terminal: DefaultTerminal) -> Result<()> {
         match &self.args.cmd {
             args::MxCommand::Run { path } => {
+                // spawn the log collecter
+                let port = DevServerLogCollector::start(self.render_chan.0.clone())?;
                 // spawn the inner executable
                 let pty = NativePtySystem::default();
                 let cwd = std::env::current_dir()?;
@@ -187,6 +181,7 @@ impl App {
                 cmd.cwd(cwd);
                 cmd.args(args);
                 cmd.arg(path);
+                cmd.env("MX_DEV_SERVER_PORT", port.to_string());
                 let child = pair
                     .slave
                     .spawn_command(cmd)
@@ -195,64 +190,14 @@ impl App {
                 let parser = vt100::Parser::new(size.height, size.width, 0);
 
                 let parser = RwLock::new(parser);
-                let mut reader = pair.master.try_clone_reader().unwrap();
-                let mut killer = child.clone_killer();
-                let mut writer = pair.master.take_writer().map_err(|err| eyre!("{err}"))?;
+                let reader = pair.master.try_clone_reader().unwrap();
+                let killer = child.clone_killer();
+                let writer = pair.master.take_writer().map_err(|err| eyre!("{err}"))?;
                 let pair = Mutex::new(pair);
 
                 std::thread::scope(|scope| {
-                    scope.spawn(|| -> Result<()> {
-                        loop {
-                            if !self.running.load(Ordering::Relaxed) {
-                                break;
-                            }
-                            let mut temp = [0u8; 124];
-                            if let Ok(n) = reader.read(&mut temp) {
-                                if n == 0 {
-                                    tracing::info!("terminal connection dropped");
-                                    break;
-                                }
-                                // tracing::info!("{n}");
-                                self.parser_chan.0.send(ParserMsg::Read(temp.into(), n))?;
-                            }
-                        }
-                        Ok(())
-                    });
-
-                    scope.spawn(|| -> Result<()> {
-                        for msg in self.parser_chan.1.iter() {
-                            // tracing::info!("{msg:?}");
-                            if !self.running.load(Ordering::Relaxed) {
-                                break;
-                            }
-                            match msg {
-                                ParserMsg::SetSize(w, h) => {
-                                    parser.write().unwrap().set_size(h, w);
-                                    pair.lock()
-                                        .unwrap()
-                                        .master
-                                        .resize(PtySize {
-                                            rows: h,
-                                            cols: w,
-                                            pixel_width: 0,
-                                            pixel_height: 0,
-                                        })
-                                        .map_err(|err| eyre!("{err}"))?;
-                                    _ = self.render_chan.0.send(RenderMsg::Draw);
-                                }
-                                ParserMsg::Read(buffer, n) => {
-                                    parser.write().unwrap().process(&buffer[..n]);
-                                    _ = self.render_chan.0.send(RenderMsg::Draw);
-                                }
-                                ParserMsg::Write(buffer, n) => {
-                                    writer.write_all(&buffer[..n])?;
-                                }
-                                ParserMsg::Quit => break,
-                            }
-                        }
-                        Ok(())
-                    });
-
+                    scope.spawn(|| self.term_reader(reader, killer));
+                    scope.spawn(|| self.parser(&parser, writer, &pair));
                     scope.spawn(|| self.renderer(&parser, terminal));
                 });
 
@@ -261,7 +206,71 @@ impl App {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, ret(level = Level::TRACE), err)]
+    fn term_reader(
+        &self,
+        mut reader: Box<dyn std::io::Read + Send>,
+        mut killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    ) -> Result<()> {
+        loop {
+            if !self.running.load(Ordering::Relaxed) {
+                killer.kill()?;
+                break;
+            }
+            let mut temp = [0u8; 124];
+            if let Ok(n) = reader.read(&mut temp) {
+                if n == 0 {
+                    tracing::info!("terminal connection dropped");
+                    break;
+                }
+                // tracing::info!("{n}");
+                self.parser_chan.0.send(ParserMsg::Read(temp.into(), n))?;
+            }
+        }
+        Ok(())
+    }
+
+    #[instrument(skip_all, ret(level = Level::TRACE), err)]
+    fn parser(
+        &self,
+        parser: &RwLock<vt100::Parser>,
+        mut writer: Box<dyn std::io::Write + Send>,
+        pair: &Mutex<portable_pty::PtyPair>,
+    ) -> Result<()> {
+        for msg in self.parser_chan.1.iter() {
+            // tracing::info!("{msg:?}");
+            if !self.running.load(Ordering::Relaxed) {
+                break;
+            }
+            match msg {
+                ParserMsg::SetSize(w, h) => {
+                    parser.write().unwrap().set_size(h, w);
+                    pair.lock()
+                        .unwrap()
+                        .master
+                        .resize(PtySize {
+                            rows: h,
+                            cols: w,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        })
+                        .map_err(|err| eyre!("{err}"))?;
+                    _ = self.render_chan.0.send(RenderMsg::Draw);
+                }
+                ParserMsg::Read(buffer, n) => {
+                    parser.write().unwrap().process(&buffer[..n]);
+                    _ = self.render_chan.0.send(RenderMsg::Draw);
+                }
+                ParserMsg::Write(buffer, n) => {
+                    writer.write_all(&buffer[..n])?;
+                }
+                ParserMsg::Quit => break,
+            }
+        }
+        Ok(())
+    }
+
+    #[instrument(skip_all, ret(level = Level::TRACE), err)]
     fn renderer(
         &self,
         parser: &RwLock<vt100::Parser>,
@@ -335,7 +344,9 @@ impl App {
             }
             RenderMsg::Draw => {
                 // tracing::info!("draw");
-                return RendererAction::ShouldRender(parser.read().unwrap().screen().clone());
+                return RendererAction::ShouldRender(Box::new(
+                    parser.read().unwrap().screen().clone(),
+                ));
             }
         };
         RendererAction::Idle
@@ -384,7 +395,10 @@ impl App {
             .areas(title_area);
             frame.render_effect(fx, title_area, dt);
         }
-        let area = self.get_pty_area(frame.area());
+        let area = self.get_pty_area(frame.area()).outer(Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
         frame.render_widget(&block, area);
         let screen_area = block.inner(area);
 

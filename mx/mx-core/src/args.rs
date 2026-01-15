@@ -21,6 +21,12 @@ pub enum MxCommand {
     Run { path: PathBuf },
 }
 
+impl MxArgs {
+    pub fn parse() -> Self {
+        clap::Parser::parse()
+    }
+}
+
 fn parse_percentage(val: &str) -> Result<u32> {
     let val = val.trim_end_matches("%");
     let num: u32 = val.parse()?;
