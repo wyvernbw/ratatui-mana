@@ -49,11 +49,13 @@ mod logging;
 
 use crate::args::MxArgs;
 use crate::logging::RatatuiLayer;
+use crate::logging::Trace;
 
 fn main() -> Result<()> {
     color_eyre::install()?;
     let render_chan = flume::unbounded();
     _ = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(RatatuiLayer::new(render_chan.0.clone()))
         .try_init();
 
@@ -114,7 +116,7 @@ impl EffectExt for Option<Effect> {
 
 #[derive(Debug, Clone)]
 pub enum RenderMsg {
-    Log(Box<str>),
+    Log(Trace),
     Draw,
     Quit,
 }
@@ -285,7 +287,7 @@ impl App {
             }
             if app_fx.running() {
                 // this is only used for effects so it can be low fps
-                if let Some(left) = Duration::from_millis(16).checked_sub(dt.into()) {
+                if let Some(left) = Duration::from_millis(100).checked_sub(dt.into()) {
                     std::thread::sleep(left.into());
                 }
             }
@@ -303,8 +305,9 @@ impl App {
         match msg {
             RenderMsg::Quit => return false,
             RenderMsg::Log(log) => {
+                let area = self.get_pty_area(terminal.get_frame().area());
                 _ = terminal.insert_before(1, |buf| {
-                    Line::raw(&*log).render(buf.area, buf);
+                    log.render(buf.area, buf);
                 });
                 // _ = self.render_chan.0.send(RenderMsg::Draw);
             }
