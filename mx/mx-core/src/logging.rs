@@ -8,8 +8,8 @@ use flume::Sender;
 use ratatui::{
     prelude::{Buffer, Rect},
     style::{Color, Style, Styled},
-    text::{self, Line},
-    widgets::Widget,
+    text::{self, Line, ToSpan},
+    widgets::{Paragraph, Widget},
 };
 use serde::{Deserialize, Serialize, de::Visitor};
 use tracing::Level;
@@ -41,6 +41,7 @@ where
             message: visitor.message,
             fields: visitor.fields,
             span_data: None,
+            widget: None,
         };
 
         self.0.send(trace);
@@ -75,16 +76,16 @@ impl tracing::field::Visit for MxVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             self.message = format!("{:?}", value).into();
-        } else {
-            let name = match field.name() {
-                "return" => "ret",
-                "error" => "err",
-                name => name,
-            };
-            let name = name.to_string().into();
-            let value = format!("{value:?}").into();
-            self.fields.push((name, value));
-        }
+            return;
+        };
+        let name = match field.name() {
+            "return" => "ret",
+            "error" => "err",
+            name => name,
+        };
+        let name = name.to_string().into();
+        let value = format!("{value:?}").into();
+        self.fields.push((name, value));
     }
 }
 
@@ -94,6 +95,8 @@ pub struct Trace {
     message: Str,
     fields: Vec<(Str, Str)>,
     span_data: Option<Vec<SpanData>>,
+    #[serde(skip)]
+    widget: Option<Paragraph<'static>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,24 +174,41 @@ impl Trace {
     }
 }
 
+impl Trace {
+    pub fn create_line_and_get_height(&mut self) -> u16 {
+        let fields = self
+            .fields
+            .iter()
+            .map(|(name, value)| format!("{}={value} ", name.set_style(Style::new().italic())))
+            .collect::<String>();
+        let fields = text::Span::raw(fields).style(Style::new().fg(Color::White).dim());
+        let level =
+            text::Span::raw(format!("[{}] ", self.level)).style(Style::new().fg(self.color()));
+        let mut message = self
+            .message
+            .lines()
+            .map(|line| Line::<'static>::raw(line.to_string()))
+            .collect::<Vec<_>>();
+        let height = message.len() as u16;
+        let first: Line<'static> = message[0].clone();
+        let first = text::Span::raw(first.spans[0].to_string());
+        let new_line = Line::from_iter([level, fields, first]);
+        message[0] = new_line;
+        let message = Paragraph::new(message).style(Style::new().dim());
+        self.widget = Some(message);
+        height
+    }
+}
+
 impl Widget for Trace {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
     {
-        let level =
-            text::Span::raw(format!("[{}] ", self.level)).style(Style::new().fg(self.color()));
-        let message =
-            text::Span::raw(format!("{}", self.message)).style(Style::new().fg(Color::White).dim());
-        let fields = self
-            .fields
-            .into_iter()
-            .map(|(name, value)| format!("{}={value} ", name.set_style(Style::new().italic())))
-            .collect::<String>();
-        let fields = text::Span::raw(fields).style(Style::new().fg(Color::White).dim());
-        let line = Line::from_iter([level, fields, message]);
-        let area = area.centered_horizontally(ratatui::layout::Constraint::Ratio(1, 2));
-        line.render(area, buf);
+        if let Some(line) = self.widget {
+            let area = area.centered_horizontally(ratatui::layout::Constraint::Ratio(1, 2));
+            line.render(area, buf);
+        }
     }
 }
 
@@ -243,12 +263,12 @@ impl DevServerLogCollector {
     pub fn start(tx: Sender<RenderMsg>) -> Result<u16> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let socket = listener.local_addr()?;
-        tracing::info!("listening on {}", listener.local_addr()?);
+        tracing::trace!("listening on {}", listener.local_addr()?);
 
         let handle = std::thread::spawn(move || -> Result<()> {
             loop {
                 let (mut stream, _) = listener.accept()?;
-                tracing::info!("accepted connection");
+                tracing::trace!("accepted connection");
                 loop {
                     let mut deserializer = dlhn::Deserializer::new(&mut stream);
                     let trace = Trace::deserialize(&mut deserializer);

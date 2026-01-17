@@ -11,6 +11,7 @@ use escargot::{CargoBuild, CommandMessages, format::BuildFinished};
 use mx_core::RenderMsg;
 use portable_pty::{Child, CommandBuilder, PtyPair};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::{AppBridge, args};
 
@@ -50,36 +51,45 @@ impl IpcInner {
         Ok(())
     }
 
+    #[instrument(err, skip_all)]
     pub fn run(mut self) -> Result<()> {
+        mx_core::init();
         loop {
             let mut deserializer = dlhn::Deserializer::new(&mut self.stream);
             let msg = IpcMessage::deserialize(&mut deserializer)?;
             match msg {
                 IpcMessage::InnerProgressUpdate(_) => {}
                 IpcMessage::Run(run) => {
-                    let mut metadata = MetadataCommand::new();
-                    metadata.features(CargoOpt::SomeFeatures(run.features_args.features.clone()));
-
-                    let cmd = CargoBuild::new().features(run.features_args.features.join(" "));
-                    let cmd = if run.features_args.all_features {
-                        metadata.features(CargoOpt::AllFeatures);
-                        cmd.all_features()
-                    } else {
-                        cmd
+                    let build_cmd = || {
+                        let mut metadata = MetadataCommand::new();
+                        metadata
+                            .features(CargoOpt::SomeFeatures(run.features_args.features.clone()));
+                        let build_cmd =
+                            CargoBuild::new().features(run.features_args.features.join(" "));
+                        let build_cmd = if run.features_args.all_features {
+                            metadata.features(CargoOpt::AllFeatures);
+                            build_cmd.all_features()
+                        } else {
+                            build_cmd
+                        };
+                        let build_cmd = if run.features_args.no_default_features {
+                            metadata.features(CargoOpt::NoDefaultFeatures);
+                            build_cmd.no_default_features()
+                        } else {
+                            build_cmd
+                        };
+                        let build_cmd = if let [package, ..] = run.workspace_args.package.as_slice()
+                        {
+                            // metadata.other_options(["-p".to_string(), package.to_string()]);
+                            build_cmd.package(package)
+                        } else {
+                            build_cmd
+                        };
+                        (metadata, build_cmd)
                     };
-                    let cmd = if run.features_args.no_default_features {
-                        metadata.features(CargoOpt::NoDefaultFeatures);
-                        cmd.no_default_features()
-                    } else {
-                        cmd
-                    };
-                    let cmd = if let [package, ..] = run.workspace_args.package.as_slice() {
-                        metadata.other_options(["-p".to_string(), package.to_string()]);
-                        cmd.package(package)
-                    } else {
-                        cmd
-                    };
+                    let (metadata, cmd) = build_cmd();
                     let metadata = metadata.exec()?;
+                    let mut cmd = cmd.into_command();
                     self.send(IpcMessage::InnerProgressUpdate(
                         InnerProgressUpdate::BuildStarted(
                             metadata
@@ -95,17 +105,18 @@ impl IpcInner {
                                 .unwrap_or_default(),
                         ),
                     ))?;
-                    let mut cmd = cmd.run()?.command();
                     cmd.stdout(Stdio::piped());
                     cmd.stderr(Stdio::piped());
                     let cmd = CommandMessages::with_command(cmd)?;
 
+                    tracing::trace!("receiving messages");
                     for message in cmd {
                         match message?.decode()? {
                             escargot::format::Message::BuildFinished(build) => {
                                 self.send(IpcMessage::InnerProgressUpdate(
                                     InnerProgressUpdate::BuildFinished(build),
                                 ))?;
+                                break;
                             }
                             escargot::format::Message::CompilerArtifact(_) => {
                                 self.send(IpcMessage::InnerProgressUpdate(
@@ -118,6 +129,8 @@ impl IpcInner {
                             _ => todo!(),
                         }
                     }
+                    let (_, run_cmd) = build_cmd();
+                    run_cmd.run()?.command().spawn()?;
                     self.running = Some(run);
                 }
                 IpcMessage::Reload => todo!(),
@@ -188,7 +201,6 @@ impl OuterIpc {
                         if !bridge.running.load(Ordering::Relaxed) {
                             break Ok(());
                         }
-                        tracing::trace!("waiting for message...");
                         let msg = IpcMessage::deserialize(&mut deser)?;
                         tracing::trace!("{msg:?}");
                         bridge.ipc_chan.0.send(IpcEvent::Message(msg))?;

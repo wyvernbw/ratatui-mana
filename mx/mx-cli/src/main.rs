@@ -44,17 +44,14 @@ use crate::ipc::IpcEvent;
 use crate::ipc::OuterIpc;
 use crate::tui::AppFx;
 
+static SERVING: &str = r#" ----------------------------------------------------------
+        💫 Serving your application!
+        Press C-SPC to use the `mx` menu.
+        Your app will automatically reload if you change the code.
+        ----------------------------------------------------------"#;
+
 fn main() -> Result<()> {
     let render_chan = flume::bounded(1024);
-    _ = tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::builder()
-                .with_default_directive("info".parse()?)
-                .from_env_lossy(),
-        )
-        .with(RatatuiLayer::new(render_chan.0.clone()))
-        .try_init();
-
     let args = MxArgs::parse();
     let (x, y) = crossterm::terminal::size()?;
     let result = AppBridge::new(args, render_chan, (x, y)).run();
@@ -91,6 +88,7 @@ type Chan<T> = (Sender<T>, Receiver<T>);
 enum RendererAction {
     ShouldQuit,
     ShouldRender(Box<vt100::Screen>),
+    ShouldRun,
     Idle,
 }
 
@@ -113,6 +111,15 @@ impl AppBridge {
     pub fn run(self) -> Result<()> {
         match &self.args.cmd {
             args::MxCommand::Run(run) => {
+                _ = tracing_subscriber::registry()
+                    .with(
+                        tracing_subscriber::EnvFilter::builder()
+                            .with_default_directive("info".parse()?)
+                            .from_env_lossy(),
+                    )
+                    .with(RatatuiLayer::new(self.render_chan.0.clone()))
+                    .try_init();
+
                 let mut terminal = ratatui::init_with_options(TerminalOptions {
                     viewport: Viewport::Inline(run.args.height as u16 * self.aspect.1 / 100),
                 });
@@ -255,6 +262,11 @@ impl AppBridge {
                         state.screen = Some(sc);
                     }
                     RendererAction::Idle => {}
+                    RendererAction::ShouldRun => {
+                        tracing::info!("{}", SERVING);
+                        std::thread::sleep(Duration::from_millis(500).into());
+                        state.stage = AppStage::Running;
+                    }
                 }
             }
             let res = terminal.draw(|frame| {
@@ -272,7 +284,6 @@ impl AppBridge {
     #[instrument(skip_all, ret(level = Level::TRACE), err)]
     pub(crate) fn run_ipc(&self, ipc: OuterIpc) -> Result<()> {
         ipc.run(self)?;
-        println!("ipc connection dropped.");
         Ok(())
     }
 
@@ -285,8 +296,9 @@ impl AppBridge {
     ) -> RendererAction {
         match (msg, &mut state.stage) {
             (RenderMsg::Quit, _) => return RendererAction::ShouldQuit,
-            (RenderMsg::Log(log), _) => {
-                _ = terminal.insert_before(1, |buf| {
+            (RenderMsg::Log(mut log), _) => {
+                let height = log.create_line_and_get_height();
+                _ = terminal.insert_before(height, |buf| {
                     log.render(buf.area, buf);
                 });
             }
@@ -308,6 +320,7 @@ impl AppBridge {
             },
             (RenderMsg::IpcBuildFinished, AppStage::Building(_)) => {
                 state.finish_build();
+                return RendererAction::ShouldRun;
             }
             _ => {}
         };
@@ -383,6 +396,8 @@ pub(crate) struct RendererState {
     screen: Option<Box<vt100::Screen>>,
     running_app: Option<String>,
     stage: AppStage,
+    build_start: Instant,
+    build_duration: Duration,
 }
 
 pub(crate) enum AppStage {
@@ -417,6 +432,8 @@ impl RendererState {
             text_glitch_progress: 0.0,
         };
         Self {
+            build_start: Instant::now(),
+            build_duration: Duration::ZERO,
             app_fx,
             last_frame: Instant::now(),
             screen: None,
@@ -430,9 +447,11 @@ impl RendererState {
             build_max_progress,
             build_progress: 0,
         });
+        self.build_start = Instant::now();
     }
 
     pub(crate) fn finish_build(&mut self) {
         self.stage = AppStage::Building(RendererBuildState::Idle);
+        self.build_duration = self.build_start.elapsed().into();
     }
 }

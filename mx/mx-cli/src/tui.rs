@@ -4,12 +4,19 @@ use ratatui::layout::Direction;
 use ratatui::layout::Flex;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
+use ratatui::layout::Offset;
 use ratatui::layout::Rect;
+use ratatui::prelude::Buffer;
 use ratatui::style::Style;
+use ratatui::text;
+use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
+use ratatui::widgets::LineGauge;
 use ratatui::widgets::Padding;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
 use tachyonfx::Duration;
 use tachyonfx::Effect;
 use tachyonfx::EffectRenderer;
@@ -68,23 +75,20 @@ impl AppBridge {
         frame.render_widget(&block, area);
         let screen_area = block.inner(area);
 
+        let [status_corner] = Layout::vertical([Constraint::Length(5)]).areas(frame.area());
+        let [_, _, status_corner] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Max(area.width),
+            Constraint::Min(24),
+        ])
+        .areas(status_corner);
+
         match state.stage {
             AppStage::StaringIpc => {
                 let loading = Paragraph::new(format!("Loading {running_app}..."))
                     .centered()
                     .style(Style::new().dim());
                 let screen_area = screen_area.centered_vertically(Constraint::Length(1));
-                frame.render_widget(loading, screen_area);
-            }
-            AppStage::Building(RendererBuildState::Building {
-                build_max_progress,
-                build_progress,
-            }) => {
-                let loading = Paragraph::new(format!("Building {running_app}..."));
-                frame.render_widget(loading, screen_area);
-            }
-            AppStage::Building(RendererBuildState::Idle) => {
-                let loading = Paragraph::new(format!("Built {running_app}."));
                 frame.render_widget(loading, screen_area);
             }
             AppStage::Running => {
@@ -94,6 +98,65 @@ impl AppBridge {
                     frame.render_widget(term, screen_area);
                 }
             }
+            _ => {}
         }
+
+        StatusCorner { state, dt }.render(status_corner, frame.buffer_mut());
+    }
+}
+
+pub struct StatusCorner<'a> {
+    state: &'a RendererState,
+    dt: Duration,
+}
+
+impl<'a> Widget for StatusCorner<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if let AppStage::StaringIpc = self.state.stage {
+            return;
+        }
+        let running_app = self.state.running_app.as_ref().map_or("", |v| v);
+
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().dim())
+            .title_alignment(ratatui::layout::HorizontalAlignment::Right)
+            .title_top(" C-SPC: more ");
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let [progress_area, status_area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+
+        let progress = match &self.state.stage {
+            AppStage::Building(RendererBuildState::Building {
+                build_max_progress,
+                build_progress,
+            }) => LineGauge::default().ratio(*build_progress as f64 / *build_max_progress as f64),
+            _ => LineGauge::default().ratio(1.0),
+        };
+        let progress = progress
+            .filled_style(Style::new().green())
+            .label("Build")
+            .unfilled_style(Style::new().dim());
+        if self.state.build_duration != Duration::ZERO {
+            let elapsed_text = text::Span::raw(format!(
+                "{:.1}s 🎉",
+                self.state.build_duration.as_secs_f32()
+            ))
+            .into_right_aligned_line();
+            let [progress_area, elapsed_area] = Layout::horizontal([
+                Constraint::Fill(1),
+                Constraint::Length(elapsed_text.width() as u16 + 1),
+            ])
+            .areas(progress_area);
+            progress.render(progress_area, buf);
+            elapsed_text.render(elapsed_area, buf);
+        } else {
+            progress.render(progress_area, buf);
+        }
+
+        let status = Paragraph::new("Status: Running 🔮".to_string()).wrap(Wrap::default());
+        status.render(status_area, buf);
     }
 }
