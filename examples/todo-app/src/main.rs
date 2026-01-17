@@ -1,13 +1,15 @@
-use color_eyre::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent};
+use std::io::stdout;
+
+use anyhow::Result;
+use crossterm::event::{EnableMouseCapture, Event, KeyCode, KeyEvent};
 use mana_tui::prelude::*;
 use ratatui::{
     DefaultTerminal, layout::Rect, style::palette::tailwind as tw, symbols::braille::BRAILLE,
 };
 
-fn main() -> color_eyre::Result<()> {
-    color_eyre::install()?;
+fn main() -> anyhow::Result<()> {
     mana_tui::mx::init();
+    crossterm::execute!(stdout(), EnableMouseCapture)?;
     ratatui::run(app)?;
     Ok(())
 }

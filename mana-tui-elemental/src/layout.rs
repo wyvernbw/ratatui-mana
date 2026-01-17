@@ -9,12 +9,12 @@ use std::{
 use derive_more as d;
 use glam::{U16Vec2, u16vec2};
 use hecs::{CommandBuffer, Component, ComponentError, Entity, Query, World};
-use ratatui::widgets::StatefulWidget;
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Margin, Rect},
     widgets::{Padding, Widget},
 };
+use ratatui::{layout::Offset, widgets::StatefulWidget};
 pub use tui_scrollview::{ScrollView, ScrollViewState};
 
 /// trait for rendering elements through a shared reference. this is automatically implemented
@@ -90,11 +90,7 @@ impl ElementCtx {
         if let Size::Fixed(size) = **height {
             props.size.y = size;
         }
-        let max_size = props.size.saturating_sub(u16vec2(
-            padding.right + padding.left,
-            padding.bottom + padding.top,
-        ));
-
+        let inner_size = props.inner_size_from_padding(padding);
         let mut space_used = AxisSizes::default();
 
         drop(props_query);
@@ -109,10 +105,10 @@ impl ElementCtx {
         for child in children {
             let mut child_props = self.world.get::<&mut Props>(child)?;
             if width.should_clamp() {
-                child_props.size.x = child_props.size.x.clamp(0, max_size.x);
+                child_props.size.x = child_props.size.x.clamp(0, inner_size.x);
             }
             if height.should_clamp() {
-                child_props.size.y = child_props.size.y.clamp(0, max_size.x);
+                child_props.size.y = child_props.size.y.clamp(0, inner_size.x);
             }
             space_used = space_used.increase(child_props.size, *direction);
         }
@@ -166,10 +162,7 @@ impl ElementCtx {
         let (props, &padding, children, &direction, &gap) = query.get().unwrap();
 
         let children = children.clone();
-        let inner_size = props.size.saturating_sub(u16vec2(
-            padding.right + padding.left,
-            padding.bottom + padding.top,
-        ));
+        let inner_size = props.inner_size_from_padding(&padding);
 
         drop(query);
 
@@ -472,12 +465,16 @@ impl ElementCtx {
     /// also see [`ratatui::prelude::Rect`], [`ratatui::prelude::Buffer`]
     pub fn render(&mut self, root: Element, area: Rect, buf: &mut Buffer) {
         // render self
+        self.render_impl(root, area, buf, Offset { x: 0, y: 0 });
+    }
 
+    fn render_impl(&mut self, root: Element, area: Rect, buf: &mut Buffer, offset: Offset) {
         let mut query = self
             .world
             .query_one::<(&mut Props, Option<&Children>)>(root);
         let (props, children) = query.get().unwrap();
-        let area = props.split_area(area);
+        let area = props.split_area(area, offset);
+
         (props.render)(self, root, area, buf);
 
         // render children
@@ -488,17 +485,23 @@ impl ElementCtx {
         drop(query);
 
         if let Ok(mut scrollview) = self.remove_one::<ScrollView>(root) {
-            let size = scrollview.size();
             {
-                let buf = scrollview.buf_mut();
                 for child in children.iter() {
-                    self.render(child, area, buf);
+                    self.render_impl(
+                        child,
+                        scrollview.area(),
+                        scrollview.buf_mut(),
+                        Offset {
+                            x: offset.x - i32::from(area.x),
+                            y: offset.y - i32::from(area.y),
+                        },
+                    );
                 }
             };
             {
                 let mut scroll_state = self.get::<&mut ScrollViewState>(root);
                 let mut default_scroll_state = ScrollViewState::default();
-                scrollview.render(
+                scrollview.clone().render(
                     area,
                     buf,
                     scroll_state
@@ -507,10 +510,10 @@ impl ElementCtx {
                 );
             }
 
-            _ = self.insert_one(root, ScrollView::new(size));
+            _ = self.insert_one(root, scrollview);
         } else {
             for child in children.iter() {
-                self.render(child, area, buf);
+                self.render_impl(child, area, buf, offset);
             }
         }
     }
@@ -626,7 +629,7 @@ impl Props {
     fn inner_size_from_padding(&self, padding: &Padding) -> U16Vec2 {
         self.inner_size(Margin {
             horizontal: padding.left + padding.right,
-            vertical: padding.left + padding.right,
+            vertical: padding.top + padding.bottom,
         })
     }
     fn inner_size(&self, margin: Margin) -> U16Vec2 {
@@ -636,11 +639,11 @@ impl Props {
 }
 
 impl Props {
-    fn split_area(&self, area: Rect) -> Rect {
+    fn split_area(&self, area: Rect, offset: Offset) -> Rect {
         area.intersection(Rect {
             // DONE: implement position
-            x: self.position.x,
-            y: self.position.y,
+            x: self.position.x.saturating_add_signed(offset.x as i16),
+            y: self.position.y.saturating_add_signed(offset.y as i16),
             width: self.size.x,
             height: self.size.y,
         })

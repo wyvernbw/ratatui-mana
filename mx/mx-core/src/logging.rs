@@ -182,18 +182,29 @@ impl Trace {
             .map(|(name, value)| format!("{}={value} ", name.set_style(Style::new().italic())))
             .collect::<String>();
         let fields = text::Span::raw(fields).style(Style::new().fg(Color::White).dim());
+
         let level =
             text::Span::raw(format!("[{}] ", self.level)).style(Style::new().fg(self.color()));
+
         let mut message = self
             .message
             .lines()
             .map(|line| Line::<'static>::raw(line.to_string()))
             .collect::<Vec<_>>();
+
         let height = message.len() as u16;
-        let first: Line<'static> = message[0].clone();
+
+        let empty_line = Line::from_iter([text::Span::raw("")]);
+        let first: Line<'static> = message.first().unwrap_or(&empty_line).clone();
         let first = text::Span::raw(first.spans[0].to_string());
         let new_line = Line::from_iter([level, fields, first]);
-        message[0] = new_line;
+
+        if message.is_empty() {
+            message.push(new_line);
+        } else {
+            message[0] = new_line;
+        }
+
         let message = Paragraph::new(message).style(Style::new().dim());
         self.widget = Some(message);
         height
