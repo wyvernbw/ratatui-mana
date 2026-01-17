@@ -13,8 +13,9 @@ bon = { workspace = true, features = ["experimental-overwritable"] }
 derive_more.workspace = true
 tracing.workspace = true
 hecs.workspace = true
-glam = "0.30.9"
+glam = "0.30.10"
 strum = { version = "0.27.2", features = ["derive"] }
+tui-scrollview = "0.6.2"
 
 [dev-dependencies]
 mana-tui = { path = "..", features = ["nightly", "macros"] }

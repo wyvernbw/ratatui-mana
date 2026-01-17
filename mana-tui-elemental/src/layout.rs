@@ -8,21 +8,26 @@ use std::{
 
 use derive_more as d;
 use glam::{U16Vec2, u16vec2};
-use hecs::{Bundle, CommandBuffer, Component, ComponentError, DynamicBundle, Entity, Query, World};
+use hecs::{CommandBuffer, Component, ComponentError, Entity, Query, World};
+use ratatui::widgets::StatefulWidget;
 use ratatui::{
     buffer::Buffer,
-    layout::{Direction, Rect},
-    widgets::{Padding, Paragraph, Widget},
+    layout::{Direction, Margin, Rect},
+    widgets::{Padding, Widget},
 };
+pub use tui_scrollview::{ScrollView, ScrollViewState};
 
 /// trait for rendering elements through a shared reference. this is automatically implemented
 /// for anything that implements [`Widget`], [`Clone`] and [`Component`]
-pub trait ElWidget: std::fmt::Debug + Component {
+pub trait ElWidget<M>: std::fmt::Debug + Component {
     /// render the element through the shared reference. clones internally
     fn render_element(&self, area: Rect, buf: &mut Buffer);
 }
 
-impl<W: 'static> ElWidget for W
+/// marker for [`ElWidget`] trait.
+pub struct WidgetMarker;
+
+impl<W: 'static> ElWidget<WidgetMarker> for W
 where
     W: Widget + Clone + std::fmt::Debug + Component,
 {
@@ -448,21 +453,62 @@ impl ElementCtx {
         self.calculate_fit_sizes(element)?;
         self.calculate_grow_sizes(element, true, area)?;
         self.calculate_positions(element)?;
+        self.layout_postprocess();
         Ok(())
+    }
+    fn layout_postprocess(&mut self) {
+        for (props, scrollview, padding) in
+            self.query_mut::<(&mut Props, &mut ScrollView, Option<&Padding>)>()
+        {
+            let inner_size = props.inner_size_from_padding(padding.unwrap_or(&Padding::ZERO));
+            *scrollview = ScrollView::new(ratatui::layout::Size {
+                width: inner_size.x,
+                height: inner_size.y,
+            });
+        }
     }
     /// renders the tree.
     ///
     /// also see [`ratatui::prelude::Rect`], [`ratatui::prelude::Buffer`]
-    pub fn render(&self, root: Element, area: Rect, buf: &mut Buffer) {
+    pub fn render(&mut self, root: Element, area: Rect, buf: &mut Buffer) {
+        // render self
+
         let mut query = self
             .world
             .query_one::<(&mut Props, Option<&Children>)>(root);
         let (props, children) = query.get().unwrap();
         let area = props.split_area(area);
         (props.render)(self, root, area, buf);
-        if let Some(children) = children {
-            let children = children.clone();
-            drop(query);
+
+        // render children
+
+        let Some(children) = children else { return };
+
+        let children = children.clone();
+        drop(query);
+
+        if let Ok(mut scrollview) = self.remove_one::<ScrollView>(root) {
+            let size = scrollview.size();
+            {
+                let buf = scrollview.buf_mut();
+                for child in children.iter() {
+                    self.render(child, area, buf);
+                }
+            };
+            {
+                let mut scroll_state = self.get::<&mut ScrollViewState>(root);
+                let mut default_scroll_state = ScrollViewState::default();
+                scrollview.render(
+                    area,
+                    buf,
+                    scroll_state
+                        .as_deref_mut()
+                        .unwrap_or(&mut default_scroll_state),
+                );
+            }
+
+            _ = self.insert_one(root, ScrollView::new(size));
+        } else {
             for child in children.iter() {
                 self.render(child, area, buf);
             }
@@ -574,6 +620,19 @@ pub(crate) struct Props {
     pub(crate) size: U16Vec2,
     pub(crate) position: U16Vec2,
     pub(crate) render: fn(&ElementCtx, Element, Rect, &mut Buffer),
+}
+
+impl Props {
+    fn inner_size_from_padding(&self, padding: &Padding) -> U16Vec2 {
+        self.inner_size(Margin {
+            horizontal: padding.left + padding.right,
+            vertical: padding.left + padding.right,
+        })
+    }
+    fn inner_size(&self, margin: Margin) -> U16Vec2 {
+        self.size
+            .saturating_sub(u16vec2(margin.horizontal, margin.vertical))
+    }
 }
 
 impl Props {

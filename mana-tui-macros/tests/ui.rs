@@ -1,4 +1,4 @@
-use mana_tui::prelude::*;
+use mana_tui::prelude::{strum::IntoEnumIterator, *};
 use mana_tui_macros::{subview, ui};
 
 #[subview]

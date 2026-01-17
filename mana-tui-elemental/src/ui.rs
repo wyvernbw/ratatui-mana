@@ -113,31 +113,31 @@ use crate::layout::{
 /// ctx.spawn_ui(root);
 ///
 /// ```
-pub fn ui(w: impl IntoView) -> UiBuilder<ui_builder::Empty> {
+pub fn ui<M>(w: impl IntoView<M>) -> UiBuilder<ui_builder::Empty> {
     __ui_internal(w.into_view())
 }
 
 /// trait that marks a type can be converted into a [`View`].
 ///
 /// automatically implementeed for widgets.
-pub trait IntoView {
+pub trait IntoView<M> {
     /// make the conversion to view.
     fn into_view(self) -> View;
 }
 
-impl<W> IntoView for W
+impl<W, M> IntoView<M> for W
 where
-    W: ElWidget,
+    W: ElWidget<M>,
 {
     fn into_view(self) -> View {
         let mut builder = View::new();
-        fn render_system<E: ElWidget>(
+        fn render_system<M, W: ElWidget<M>>(
             ctx: &ElementCtx,
             entity: hecs::Entity,
             area: Rect,
             buf: &mut Buffer,
         ) {
-            if let Ok(widget) = ctx.world.get::<&E>(entity) {
+            if let Ok(widget) = ctx.world.get::<&W>(entity) {
                 widget.render_element(area, buf);
             }
         }
@@ -147,7 +147,7 @@ where
             Props {
                 size: U16Vec2::default(),
                 position: U16Vec2::default(),
-                render: render_system::<W>,
+                render: render_system::<M, W>,
             },
         ));
         builder

@@ -7,7 +7,7 @@ license = "MIT"
 edition = "2024"
 
 [dependencies]
-color-eyre = "0.6.3"
+anyhow = "1.0.100"
 crossterm = "0.29.0"
 mana-tui = { version = "0.0.1", path = "../..", features = ["macros"] }
 ratatui.workspace = true
