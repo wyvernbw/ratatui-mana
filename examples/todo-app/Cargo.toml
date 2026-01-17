@@ -11,3 +11,5 @@ color-eyre = "0.6.3"
 crossterm = "0.29.0"
 mana-tui = { version = "0.0.1", path = "../..", features = ["macros"] }
 ratatui.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

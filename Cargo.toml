@@ -1,49 +1,93 @@
 [package]
+edition = "2024"
 name = "mana-tui"
 version = "0.0.1"
-edition = "2024"
-license = "GPL-3.0"
+license = "MIT"
 
 [features]
-macros = ["dep:bon", "dep:mana-tui-macros"]
+macros = [
+    "dep:bon",
+    "dep:mana-tui-macros",
+]
 nightly = ["mana-tui-elemental/nightly"]
 
-[workspace]
-resolver = "3"
-members = [
-  "mana-tui-elemental",
-  "mana-tui-macros",
-  "mana-tui-subsecond",
-  # examples:
-  "examples/todo-app",
-]
-
 [dependencies]
-mana-tui-macros = { workspace = true, optional = true }
-mana-tui-elemental.workspace = true
-ratatui.workspace = true
-bon = { workspace = true, optional = true }
+mx-core.workspace = true
+
+[dependencies.bon]
+workspace = true
+optional = true
+
+[dependencies.mana-tui-elemental]
+workspace = true
+
+[dependencies.mana-tui-macros]
+workspace = true
+optional = true
+
+[dependencies.ratatui]
+workspace = true
+
+[dev-dependencies]
+bon = "3.8.1"
+
+[dev-dependencies.hecs]
+workspace = true
+
+[dev-dependencies.mana-tui-elemental]
+workspace = true
+
+[dev-dependencies.mana-tui-macros]
+workspace = true
+
+[dev-dependencies.ratatui]
+workspace = true
+
+[workspace]
+members = [
+    "mana-tui-elemental",
+    "mana-tui-macros",
+    "mx/mx-core",
+    "mx/mx-cli",
+    "examples/todo-app",
+]
+resolver = "3"
+
+[workspace.dependencies]
+ratatui = { git = "https://github.com/wyvernbw/ratatui.git", branch = "wyvernbw/fix-resize-for-inline-viewport-2086", version = "0.30.0", features = ["scrolling-regions"] }
+tracing = "0.1.44"
+bon = "3.8.1"
+tracing-subscriber = "0.3.22"
+
+[workspace.dependencies.derive_more]
+version = "2.1.0"
+features = ["full"]
+
+[workspace.dependencies.hecs]
+version = "0.11.0"
+git = "https://github.com/Ralith/hecs.git"
+features = ["macros"]
+
+[workspace.dependencies.mana-tui-elemental]
+path = "./mana-tui-elemental"
+
+[workspace.dependencies.mana-tui-macros]
+path = "./mana-tui-macros"
+
+[workspace.dependencies.mx-core]
+path = "./mx/mx-core"
 
 [workspace.lints.clippy]
 pedantic = "warn"
 
-[workspace.dependencies]
-mana-tui-elemental.path = "./mana-tui-elemental"
-mana-tui-macros.path = "./mana-tui-macros"
-mana-tui-subsecond.path = "./mana-tui-subsecond"
-bon = "3.8.1"
-ratatui = { git = "https://github.com/wyvernbw/ratatui.git", branch = "serde-color-fmt-v2", features = ["serde-color-fmt-v2"] }
-derive_more = { version = "2.1.0", features = ["full"] }
-tracing = "0.1.44"
-hecs = { git = "https://github.com/Ralith/hecs.git", version = "0.11.0", features = ["macros"] }
-
-[dev-dependencies]
-bon = "3.8.1"
-ratatui.workspace = true
-mana-tui-macros.workspace = true
-mana-tui-elemental.workspace = true
-hecs.workspace = true
-
 
 [patch.crates-io]
-async-executor = { git = "https://github.com/wyvernbw/async-executor.git", branch = "scoped", version = "1.13.3" }
+ratatui = { git = "https://github.com/wyvernbw/ratatui.git", branch = "wyvernbw/fix-resize-for-inline-viewport-2086", version = "0.30.0" }
+ratatui-core = { git = "https://github.com/wyvernbw/ratatui.git", branch = "wyvernbw/fix-resize-for-inline-viewport-2086", version = "0.1.0" }
+
+# Read the optimization guideline for more details: https://ratatui.rs/recipes/apps/release-your-app/#optimizations
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = false

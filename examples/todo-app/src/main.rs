@@ -3,11 +3,11 @@ use crossterm::event::{Event, KeyCode, KeyEvent};
 use mana_tui::prelude::*;
 use ratatui::{
     DefaultTerminal, layout::Rect, style::palette::tailwind as tw, symbols::braille::BRAILLE,
-    text::ToText,
 };
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
+    mana_tui::mx::init();
     ratatui::run(app)?;
     Ok(())
 }
@@ -56,9 +56,10 @@ fn handle_events(ctx: &mut ElementCtx, state: &mut AppState, event: Event) -> bo
             code: KeyCode::Char('a'),
             ..
         }) => {
+            tracing::info!("new todo");
             state.todos.push(Todo {
                 done: false,
-                description: "This is just an example".to_string(),
+                description: format!("{} i crave productivity", state.todos.len() + 1),
             });
             false
         }
@@ -75,7 +76,7 @@ fn todo_app(state: &mut AppState) -> View {
                 <Block Padding::new(2, 2, 1, 2) Width::grow() Height::grow()>
                     <Text .style={Style::new().bg(tw::SKY.c200).fg(Color::Black)}>"(a) add todo"</Text>
                     <Block .borders={Borders::TOP} .border_type={BorderType::LightDoubleDashed} Width::grow() Height::fixed(1)/>
-                    <Block Gap(1)>
+                    <Block Gap(1) ScrollView::default() ScrollViewState::new() Width::grow()>
                     {
                         state.todos.iter().map(|todo| ui! {
                             <TodoItem .todo={todo}/>
@@ -127,9 +128,8 @@ fn todo_item(todo: &Todo) -> View {
             }
         }
     }
-
     ui! {
-        <Block Direction::Horizontal Gap(1)>
+        <Block Direction::Horizontal Gap(1) Width::grow()>
             <Checkbox .done={*done}/>
             "{description}"
         </Block>

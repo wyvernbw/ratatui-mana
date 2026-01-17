@@ -1,0 +1,40 @@
+[package]
+name = "mx-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "mx"
+path = "src/main.rs"
+
+[dependencies]
+ratatui.workspace = true 
+serde = { version = "1.0.228", features = ["rc"] }
+tracing-serde = "0.2.0"
+tachyonfx = "0.22.0"
+mx-core.workspace = true
+portable-pty = "0.9.0"
+tui-term = "0.3.0"
+terminput = "0.5.12"
+terminput-crossterm = "0.4.8"
+clap = { version = "4.5.54", features = ["derive"] }
+anyhow = "1.0.100"
+cargo_metadata = "0.23.1"
+flume = { version = "0.12.0", default-features = false }
+notify = "8.2.0"
+
+[dependencies.escargot]
+version = "0.5.15"
+default-features = false
+
+[dependencies.tracing]
+workspace = true
+
+[dependencies.tracing-subscriber]
+workspace = true
+
+[dependencies.dlhn]
+git = "https://github.com/otake84/dlhn.git"
+branch = "fix/deserialize-string"
+version = "0.1.6"
+default-features = false
