@@ -118,7 +118,7 @@ fn todo_app(ctx: &mut ElementCtx) -> View {
     let todo_count = todos.iter().count();
     ui! {
         <Block Center Width::grow() Height::grow()>
-            <Block .rounded Width::fixed(48) Height::fixed(28) Padding::ZERO>
+            <Block .borders={Borders::all().difference(Borders::TOP)} .border_type={BorderType::QuadrantOutside} Width::fixed(48) Height::fixed(28) Padding::ZERO>
                 <Titlebar/>
                 <Block Padding::new(2, 2, 1, 2) Width::grow() Height::grow()>
                     <Text
@@ -155,17 +155,17 @@ fn titlebar() -> View {
     let title_icon = BRAILLE[255];
     ui! {
         <Block
-            .rounded
-            .border_style={
-                Style::new().fg(tw::PURPLE.c300).bg(Color::Reset)
-            }
-            .borders={Borders::LEFT | Borders::RIGHT | Borders::TOP }
+            // .rounded
+            // .border_style={
+            //     Style::new().fg(tw::PURPLE.c300).bg(Color::Reset)
+            // }
+            // .borders={Borders::LEFT | Borders::RIGHT | Borders::TOP }
             .style={
                 Style::new().bg(tw::PURPLE.c300).fg(tw::PURPLE.c300)
             }
             Direction::Horizontal
             MainJustify::SpaceBetween
-            Width::grow() Height::fixed(2)
+            Width::grow() Height::fixed(1)
         >
             <Paragraph .style={Style::new().fg(Color::Black)}>"{title_icon} +++ Mana To Do +++"</Paragraph>
             <Text .style={Style::new().fg(Color::Black)}>"q {title_icon}"</Text>

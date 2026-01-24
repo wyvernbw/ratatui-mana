@@ -248,7 +248,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -860,7 +860,7 @@ checksum = "8fe90c1150662e858c7d5f945089b7517b0a80d8bf7ba4b1b5ffc984e7230a5b"
 dependencies = [
  "hashbrown",
  "portable-atomic",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1025,6 +1025,30 @@ dependencies = [
  "quote",
  "ratatui",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "mana-tui-potion"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bon",
+ "crossterm",
+ "derive_more",
+ "flume",
+ "hecs",
+ "mana-tui",
+ "mana-tui-elemental",
+ "mana-tui-macros",
+ "mana-tui-utils",
+ "ratatui",
+ "smallbox",
+ "tailcall",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1507,7 +1531,7 @@ dependencies = [
 [[package]]
 name = "ratatui"
 version = "0.30.0"
-source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#09043acb9b9c222254a9c9ed14d2cce95e4f558c"
+source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#b217549c925172de9f17346ed918902d31321b2a"
 dependencies = [
  "instability",
  "ratatui-core",
@@ -1521,7 +1545,7 @@ dependencies = [
 [[package]]
 name = "ratatui-core"
 version = "0.1.0"
-source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#09043acb9b9c222254a9c9ed14d2cce95e4f558c"
+source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#b217549c925172de9f17346ed918902d31321b2a"
 dependencies = [
  "bitflags 2.10.0",
  "compact_str",
@@ -1531,7 +1555,7 @@ dependencies = [
  "kasuari",
  "lru",
  "strum",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
  "unicode-segmentation",
  "unicode-truncate",
  "unicode-width 0.2.2",
@@ -1540,7 +1564,7 @@ dependencies = [
 [[package]]
 name = "ratatui-crossterm"
 version = "0.1.0"
-source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#09043acb9b9c222254a9c9ed14d2cce95e4f558c"
+source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#b217549c925172de9f17346ed918902d31321b2a"
 dependencies = [
  "cfg-if",
  "crossterm",
@@ -1551,7 +1575,7 @@ dependencies = [
 [[package]]
 name = "ratatui-macros"
 version = "0.7.0"
-source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#09043acb9b9c222254a9c9ed14d2cce95e4f558c"
+source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#b217549c925172de9f17346ed918902d31321b2a"
 dependencies = [
  "ratatui-core",
  "ratatui-widgets 0.3.0 (git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear)",
@@ -1560,7 +1584,7 @@ dependencies = [
 [[package]]
 name = "ratatui-termion"
 version = "0.1.0"
-source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#09043acb9b9c222254a9c9ed14d2cce95e4f558c"
+source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#b217549c925172de9f17346ed918902d31321b2a"
 dependencies = [
  "instability",
  "ratatui-core",
@@ -1570,7 +1594,7 @@ dependencies = [
 [[package]]
 name = "ratatui-termwiz"
 version = "0.1.0"
-source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#09043acb9b9c222254a9c9ed14d2cce95e4f558c"
+source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#b217549c925172de9f17346ed918902d31321b2a"
 dependencies = [
  "ratatui-core",
  "termwiz",
@@ -1598,7 +1622,7 @@ dependencies = [
 [[package]]
 name = "ratatui-widgets"
 version = "0.3.0"
-source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#09043acb9b9c222254a9c9ed14d2cce95e4f558c"
+source = "git+https://github.com/wyvernbw/ratatui.git?branch=wyvernbw%2Finline-viewport-resize-clear#b217549c925172de9f17346ed918902d31321b2a"
 dependencies = [
  "bitflags 2.10.0",
  "hashbrown",
@@ -1864,6 +1888,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "smallbox"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aca054fd9f8c2ebe8557a2433f307e038c0716124efd045daa0388afa5172189"
+
+[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1950,8 +1980,28 @@ dependencies = [
  "compact_str",
  "micromath",
  "ratatui",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "tailcall"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "695cb8728beab065fe29d03ae105a23c7cdd6e8d9ed5fd717a0bbbd8c56ab0bb"
+dependencies = [
+ "tailcall-impl",
+]
+
+[[package]]
+name = "tailcall-impl"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10b7bf224f4cbce8706b34f6fd1db63bc9b1fa933a3b9e6eee2e78a660416e13"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2057,11 +2107,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.17"
+version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
+checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl 2.0.17",
+ "thiserror-impl 2.0.18",
 ]
 
 [[package]]
@@ -2077,9 +2127,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.17"
+version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
+checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -257,71 +257,84 @@ pub(crate) fn handle_pressed(world: &mut World) {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct FocusState {
     pub(crate) normal_style: Option<Style>,
     pub(crate) current_style: Option<Style>,
     pub(crate) entity: Option<Entity>,
 }
 
-pub trait FocusExt: Ecs + SystemsExt {
-    fn use_focus<T: Component>(&mut self) {
-        let is_new = self.get_resource::<&Store<FocusState>>().is_ok();
-        let mut store = self.get_or_insert_resource_with::<&mut Store<FocusState>>(Store::new);
+pub trait Transient: Default + Clone + Component {
+    fn hook_transient<T: Component, W: Ecs + SystemsExt + ?Sized>(ecs: &mut W) {
+        let is_new = ecs.get_resource::<&Store<Self>>().is_ok();
+        let mut store = ecs.get_or_insert_resource_with::<&mut Store<Self>>(Store::new);
         let original = store.get(&TypeId::of::<T>()).cloned();
 
         if original.is_none() {
-            store.insert(
-                TypeId::of::<T>(),
-                FocusState {
-                    normal_style: None,
-                    current_style: None,
-                    entity: None,
-                },
-            );
+            store.insert(TypeId::of::<T>(), Self::default());
         }
 
         drop(store);
 
         if is_new {
-            self.add_system::<PostRenderSchedule>(|world| {
-                let Some((entity, &props, _, _)) = world
-                    .query_mut::<(Entity, &Props, Or<&Clicked, &Pressed>, &T)>()
-                    .into_iter()
-                    .next()
-                else {
-                    return;
-                };
-                _ = world.insert_one(entity, Marker(TypeId::of::<T>()));
-                let mut store = world.get_resource::<&mut Store<FocusState>>().unwrap();
-                if let Some(focus) = store.get_mut(&TypeId::of::<T>()) {
-                    let style = (props.get_style)(world, entity);
-                    let style = style.unwrap_or_default();
-                    if focus.normal_style.is_none() {
-                        focus.normal_style = Some(style);
-                    }
-                    focus.current_style = Some(style.add_modifier(Modifier::REVERSED));
-                    focus.entity = Some(entity);
-                }
+            ecs.add_system::<PostRenderSchedule>(|world| {
+                Self::update::<T>(world);
             });
-            self.add_system::<PreRenderSchedule>(|world| {
-                let Some((entity, _, &props)) =
-                    world.query_mut::<(Entity, &T, &Props)>().into_iter().next()
-                else {
-                    return;
-                };
-                _ = world.insert_one(entity, Marker(TypeId::of::<T>()));
-                let mut store = world.get_resource::<&mut Store<FocusState>>().unwrap();
-                if let Some(focus) = store.get_mut(&TypeId::of::<T>()) {
-                    focus.entity = Some(entity);
-                    let Some(style) = focus.current_style else {
-                        return;
-                    };
-                    drop(store);
-                    (props.set_style)(world, entity, style);
-                }
+            ecs.add_system::<PreRenderSchedule>(|world| {
+                Self::restore::<T>(world);
             });
         }
+    }
+
+    fn restore<T: Component>(world: &mut World);
+
+    fn update<T: Component>(world: &mut World);
+}
+
+impl Transient for FocusState {
+    fn restore<T: Component>(world: &mut World) {
+        let Some((entity, _, &props)) =
+            world.query_mut::<(Entity, &T, &Props)>().into_iter().next()
+        else {
+            return;
+        };
+        _ = world.insert_one(entity, Marker(TypeId::of::<T>()));
+        let mut store = world.get_resource::<&mut Store<FocusState>>().unwrap();
+        if let Some(focus) = store.get_mut(&TypeId::of::<T>()) {
+            focus.entity = Some(entity);
+            let Some(style) = focus.current_style else {
+                return;
+            };
+            drop(store);
+            (props.set_style)(world, entity, style);
+        }
+    }
+
+    fn update<T: Component>(world: &mut World) {
+        let Some((entity, &props, _, _)) = world
+            .query_mut::<(Entity, &Props, Or<&Clicked, &Pressed>, &T)>()
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
+        _ = world.insert_one(entity, Marker(TypeId::of::<T>()));
+        let mut store = world.get_resource::<&mut Store<FocusState>>().unwrap();
+        if let Some(focus) = store.get_mut(&TypeId::of::<T>()) {
+            let style = (props.get_style)(world, entity);
+            let style = style.unwrap_or_default();
+            if focus.normal_style.is_none() {
+                focus.normal_style = Some(style);
+            }
+            focus.current_style = Some(style.add_modifier(Modifier::REVERSED));
+            focus.entity = Some(entity);
+        }
+    }
+}
+
+pub trait FocusExt: Ecs + SystemsExt {
+    fn use_focus<T: Component>(&mut self) {
+        FocusState::hook_transient::<T, Self>(self);
     }
 }
 
