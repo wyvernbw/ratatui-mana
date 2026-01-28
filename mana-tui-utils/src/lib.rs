@@ -2,6 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use hecs::World;
 
+pub mod ext;
 pub mod resource;
 pub mod systems;
 

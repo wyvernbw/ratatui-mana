@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use hecs::{Component, Entity, World};
+use hecs::{Entity, World};
 use mana_tui_elemental::layout::Children;
 use mana_tui_utils::resource::Resources;
-use smallbox::SmallBox;
 
-use crate::{DefaultBackend, DefaultEvent, Effect, EventStream, ManaBackend, PinnedFuture};
+use crate::{DefaultEvent, Effect};
 
 #[derive(Debug, Clone, Copy)]
 pub enum FocusPolicy {
@@ -16,16 +15,17 @@ pub enum FocusPolicy {
 pub struct Focused;
 pub struct Hovered;
 pub struct Clicked;
+
 type CallbackRes<Msg> = Option<(Msg, Effect<Msg>)>;
 
-pub struct On<Msg, Model>(Arc<dyn Fn(&Model, &DefaultEvent) -> CallbackRes<Msg>>);
+pub struct On<Msg, Model>(Box<dyn Fn(&Model, &DefaultEvent) -> CallbackRes<Msg>>);
 
 impl<Msg, Model> On<Msg, Model> {
     pub fn new<F>(func: F) -> Self
     where
         F: Fn(&Model, &DefaultEvent) -> CallbackRes<Msg> + 'static,
     {
-        On(Arc::new(func))
+        On(Box::new(func))
     }
 }
 

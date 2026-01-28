@@ -215,6 +215,8 @@ pub type DefaultEvent =
 /// - if the app channel is closed somehow
 /// - if an error happens while propagating an event
 /// - if there is an error initializing the runtime
+#[bon::builder]
+#[builder(finish_fn = run)]
 pub async fn run<W: std::io::Write + 'static, Msg, Model>(
     writer: W,
     init: impl InitFn<Msg, Model>,
@@ -223,9 +225,9 @@ pub async fn run<W: std::io::Write + 'static, Msg, Model>(
     quit_signal: impl SignalFn<Msg, Model>,
 ) -> Result<(), RuntimeErr>
 where
-    Msg: Send + Sync + 'static,
-    Model: Send + Sync + 'static,
-    Msg: Clone + 'static + std::fmt::Debug,
+    Msg: Component,
+    Model: Component,
+    Msg: Clone,
 {
     let dispatch = flume::unbounded::<Msg>();
     let mut backend = DefaultBackend::new(writer);
@@ -273,7 +275,7 @@ mod examples {
     use mana_tui_macros::ui;
 
     use crate::focus::On;
-    use crate::{DefaultEvent, Effect};
+    use crate::{DefaultEvent, Effect, run};
 
     #[tokio::test(flavor = "current_thread")]
     async fn simple_app() {
@@ -281,7 +283,13 @@ mod examples {
             matches!(event, AppMsg::Quit)
         }
 
-        crate::run(std::io::stdout(), init, view, update, should_quit)
+        run()
+            .writer(std::io::stdout())
+            .init(init)
+            .view(view)
+            .update(update)
+            .quit_signal(should_quit)
+            .run()
             .await
             .unwrap();
     }
@@ -322,14 +330,14 @@ mod examples {
             >
                 <Block Direction::Horizontal CrossJustify::Center Gap(2)>
                     <Block
-                        .rounded .title_bottom="j"
-                        Width::fixed(5) Center {On::new(
+                        .rounded .title_bottom="j" .title_alignment={ratatui::layout::HorizontalAlignment::Center}
+                        Width::fixed(5) Center On::new(
                             move |_: &Model, event: &Event| match event {
                                 Event::Key(key!(Char('j'), Press)) => Some((AppMsg::Dec, Effect::none())),
                                 _ => None,
                             }
                         )
-                    }>
+                    >
                         "-"
                     </Block>
                     <Block Width::fixed(20) Height::fixed(1) Center>
@@ -342,14 +350,14 @@ mod examples {
                     }
                     </Block>
                     <Block
-                        .rounded .title_bottom="k"
-                        Width::fixed(5) Center {On::new(
+                        .rounded .title_bottom="k" .title_alignment={ratatui::layout::HorizontalAlignment::Center}
+                        Width::fixed(5) Center On::new(
                             move |_: &Model, event: &Event| match event {
                                 Event::Key(key!(Char('k'), Press)) => Some((AppMsg::Inc, Effect::none())),
                                 _ => None,
                             }
                         )
-                    }>
+                    >
                         "+"
                     </Block>
                 </Block>
