@@ -6,9 +6,9 @@ use hecs::{CommandBuffer, Component, Or};
 use hecs::{Entity, World};
 use mana_tui_elemental::layout::Children;
 use mana_tui_elemental::layout::Props;
-use mana_tui_utils::Ecs;
 use mana_tui_utils::resource::Resources;
 use mana_tui_utils::systems::SystemsExt;
+use mana_tui_utils::{Ecs, EcsMut};
 use ratatui::crossterm::event::{
     KeyCode, KeyEventKind, KeyEventState, KeyModifiers, MouseEventKind,
 };
@@ -265,9 +265,9 @@ pub(crate) struct FocusState {
 }
 
 pub trait Transient: Default + Clone + Component {
-    fn hook_transient<T: Component, W: Ecs + SystemsExt + ?Sized>(ecs: &mut W) {
+    fn hook_transient<T: Component, W: EcsMut + SystemsExt + ?Sized>(ecs: &mut W) {
         let is_new = ecs.get_resource::<&Store<Self>>().is_ok();
-        let mut store = ecs.get_or_insert_resource_with::<&mut Store<Self>>(Store::new);
+        let mut store = ecs.get_or_insert_resource_with::<&mut Store<Self>>(|_| Store::new());
         let original = store.get(&TypeId::of::<T>()).cloned();
 
         if original.is_none() {
@@ -332,10 +332,10 @@ impl Transient for FocusState {
     }
 }
 
-pub trait FocusExt: Ecs + SystemsExt {
+pub trait FocusExt: EcsMut + SystemsExt {
     fn use_focus<T: Component>(&mut self) {
         FocusState::hook_transient::<T, Self>(self);
     }
 }
 
-impl<T: Ecs> FocusExt for T {}
+impl<T: EcsMut> FocusExt for T {}

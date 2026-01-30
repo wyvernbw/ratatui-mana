@@ -1,12 +1,14 @@
 use hecs::{Query, QueryBorrow};
 
-use crate::Ecs;
+use crate::{Ecs, EcsMut};
 
 pub trait EcsExt: Ecs + Sized {
     fn single<Q: Query>(&self) -> SingleBorrow<'_, Q> {
         SingleBorrow(self.query())
     }
+}
 
+pub trait EcsExtMut: EcsMut + Sized {
     fn single_mut<Q: Query>(&mut self) -> Q::Item<'_> {
         self.query_mut::<Q>().into_iter().single()
     }
@@ -17,15 +19,16 @@ pub trait EcsExt: Ecs + Sized {
 }
 
 impl<E> EcsExt for E where E: Ecs + Sized {}
+impl<E> EcsExtMut for E where E: EcsMut + Sized {}
 
 pub struct SingleBorrow<'a, Q: Query>(QueryBorrow<'a, Q>);
 
-impl<'a, Q: Query> SingleBorrow<'a, Q> {
-    fn get(&'a mut self) -> Q::Item<'a> {
+impl<Q: Query> SingleBorrow<'_, Q> {
+    pub fn get(&mut self) -> Q::Item<'_> {
         self.0.iter().single()
     }
-    fn try_get(&'a mut self) -> Q::Item<'a> {
-        self.0.iter().single()
+    pub fn try_get(&mut self) -> Option<Q::Item<'_>> {
+        self.0.iter().try_single()
     }
 }
 

@@ -49,7 +49,7 @@ pub trait Resources {
     fn insert_or_update_resource<T: Component>(&mut self, value: T);
     fn get_or_insert_resource_with<'w: 'a, 'a, T: ComponentRef<'a>>(
         &'w mut self,
-        value: impl FnOnce() -> T::Component,
+        value: impl FnOnce(&mut Self) -> T::Component,
     ) -> T::Ref;
 }
 
@@ -89,10 +89,11 @@ impl Resources for World {
 
     fn get_or_insert_resource_with<'w: 'a, 'a, T: ComponentRef<'a>>(
         &'w mut self,
-        value: impl FnOnce() -> T::Component,
+        value: impl FnOnce(&mut Self) -> T::Component,
     ) -> T::Ref {
         let Ok((_, entity)) = Res::<T>::get_res_entity(self) else {
-            self.insert_resource(value());
+            let value = value(self);
+            self.insert_resource(value);
             return self.get_resource::<T>().unwrap();
         };
         self.get::<T>(entity).unwrap()

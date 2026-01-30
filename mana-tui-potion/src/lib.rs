@@ -1,6 +1,8 @@
 #![feature(trait_alias)]
+#![allow(clippy::collapsible_if)]
 
-pub(crate) mod focus;
+pub mod backends;
+pub mod focus;
 
 use flume::{Receiver, Sender};
 use hecs::Component;
@@ -8,13 +10,11 @@ use mana_tui_elemental::{
     layout::{Element, ElementCtx},
     ui::View,
 };
-use ratatui::{
-    Terminal,
-    prelude::{Backend, CrosstermBackend},
-};
+use ratatui::{Terminal, prelude::Backend};
 use smallbox::SmallBox;
 use tailcall::tailcall;
-use tokio_stream::StreamExt;
+
+use crate::backends::{DefaultBackend, DefaultEvent, ManaBackend, MsgStream};
 
 pub type Chan<Msg> = (Sender<Msg>, Receiver<Msg>);
 pub trait UpdateFn<Msg, Model> = AsyncFn(Model, Msg) -> (Model, Effect<Msg>) + Component;
@@ -64,8 +64,8 @@ enum RuntimeMsg<Msg> {
 pub enum RuntimeErr {
     #[error("app channel closed")]
     ChannelClosed,
-    #[error("error propagating event: {0}")]
-    PropagateEventError(#[from] hecs::ComponentError),
+    #[error("error propagating event")]
+    PropagateEventError,
     #[error("error initializing runtine")]
     InitErr,
 }
@@ -79,11 +79,11 @@ pub struct Ctx<B: Backend> {
 }
 
 #[tailcall]
-async fn runtime<Msg: Clone + 'static, Model: 'static, B: 'static + ManaBackend>(
-    model: Model,
-    view: impl ViewFn<Msg, Model>,
-    update: impl UpdateFn<Msg, Model>,
-    quit_signal: impl SignalFn<Msg, Model>,
+async fn runtime<Msg: Message, B: 'static + ManaBackend>(
+    model: Msg::Model,
+    view: impl ViewFn<Msg, Msg::Model>,
+    update: impl UpdateFn<Msg, Msg::Model>,
+    quit_signal: impl SignalFn<Msg, Msg::Model>,
     mut msg_stream: MsgStream<Msg>,
     ctx: &mut Ctx<B>,
     prev_root: Option<Element>,
@@ -111,7 +111,8 @@ async fn runtime<Msg: Clone + 'static, Model: 'static, B: 'static + ManaBackend>
             )
         }
         RuntimeMsg::Term(event) => {
-            let result = focus::propagate_event::<Msg, Model>(&ctx.el_ctx, &model, &event)?;
+            let result = focus::propagate_event::<Msg>(&ctx.el_ctx, &model, &event)
+                .map_err(|_| RuntimeErr::PropagateEventError)?;
             if let Some((msg, effect)) = result {
                 tokio::spawn(effect.0.run_effect(msg_stream.dispatch.0.clone()));
                 msg_stream
@@ -130,6 +131,9 @@ fn render<B: Backend>(ctx: &mut Ctx<B>, view: View) -> Element {
     let root = ctx.spawn_ui(view);
     let result = ctx.terminal.draw(|frame| {
         let result = ctx.el_ctx.calculate_layout(root, frame.area());
+        focus::generate_ui_stack(&mut ctx.el_ctx, root);
+        focus::init_focus_system(&mut ctx.el_ctx);
+        _ = focus::set_focus_style(&mut ctx.el_ctx);
 
         if let Err(err) = result {
             tracing::error!("failed to calculate layout: {err}");
@@ -137,7 +141,6 @@ fn render<B: Backend>(ctx: &mut Ctx<B>, view: View) -> Element {
         }
 
         ctx.el_ctx.render(root, frame.area(), frame.buffer_mut());
-        focus::generate_ui_stack(&mut ctx.el_ctx, root);
     });
 
     if let Err(err) = result {
@@ -146,67 +149,6 @@ fn render<B: Backend>(ctx: &mut Ctx<B>, view: View) -> Element {
 
     root
 }
-
-pub trait ManaBackend: Backend {
-    type Events: EventStream;
-
-    #[allow(async_fn_in_trait)]
-    async fn create_events(&mut self) -> Self::Events;
-}
-
-pub trait EventStream {
-    type Out;
-    type Err;
-
-    #[allow(async_fn_in_trait)]
-    async fn read(&mut self) -> Result<Self::Out, Self::Err>;
-}
-
-pub struct MsgStream<Msg> {
-    event_stream: <DefaultBackend<std::io::Stdout> as ManaBackend>::Events,
-    dispatch: Chan<Msg>,
-}
-
-impl<Msg> MsgStream<Msg> {
-    async fn next(this: &mut Self) -> RuntimeMsg<Msg> {
-        loop {
-            tokio::select! {
-                event = this.event_stream.read() => {
-                    if let Ok(event) = event { return RuntimeMsg::Term(event) }
-                }
-                msg = this.dispatch.1.recv_async() => {
-                    if let Ok(msg) = msg { return RuntimeMsg::App(msg) }
-                }
-            }
-        }
-    }
-}
-
-impl<W: std::io::Write> ManaBackend for CrosstermBackend<W> {
-    type Events = crossterm::event::EventStream;
-
-    async fn create_events(&mut self) -> Self::Events {
-        crossterm::event::EventStream::new()
-    }
-}
-
-impl EventStream for crossterm::event::EventStream {
-    type Out = crossterm::event::Event;
-    type Err = std::io::Error;
-
-    async fn read(&mut self) -> Result<Self::Out, Self::Err> {
-        loop {
-            let res = self.next().await;
-            if let Some(event) = res {
-                return event;
-            }
-        }
-    }
-}
-
-pub type DefaultBackend<W> = CrosstermBackend<W>;
-pub type DefaultEvent =
-    <<DefaultBackend<std::io::Stdout> as ManaBackend>::Events as EventStream>::Out;
 
 /// # Errors
 ///
@@ -217,17 +159,18 @@ pub type DefaultEvent =
 /// - if there is an error initializing the runtime
 #[bon::builder]
 #[builder(finish_fn = run)]
-pub async fn run<W: std::io::Write + 'static, Msg, Model>(
+pub async fn run<W, Msg>(
     writer: W,
-    init: impl InitFn<Msg, Model>,
-    view: impl ViewFn<Msg, Model>,
-    update: impl UpdateFn<Msg, Model>,
-    quit_signal: impl SignalFn<Msg, Model>,
+    init: impl InitFn<Msg, Msg::Model>,
+    view: impl ViewFn<Msg, Msg::Model>,
+    update: impl UpdateFn<Msg, Msg::Model>,
+    quit_signal: impl SignalFn<Msg, Msg::Model>,
 ) -> Result<(), RuntimeErr>
 where
     Msg: Component,
-    Model: Component,
     Msg: Clone,
+    W: std::io::Write + 'static,
+    Msg: Message,
 {
     let dispatch = flume::unbounded::<Msg>();
     let mut backend = DefaultBackend::new(writer);
@@ -264,140 +207,6 @@ where
     result
 }
 
-#[cfg(test)]
-mod examples {
-    use std::time::Duration;
-
-    use crossterm::event::{Event, KeyModifiers};
-    use mana_tui::key;
-    use mana_tui_elemental::prelude::*;
-    use mana_tui_elemental::ui::View;
-    use mana_tui_macros::ui;
-
-    use crate::focus::On;
-    use crate::{DefaultEvent, Effect, run};
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn simple_app() {
-        fn should_quit(_: &Model, event: &AppMsg) -> bool {
-            matches!(event, AppMsg::Quit)
-        }
-
-        run()
-            .writer(std::io::stdout())
-            .init(init)
-            .view(view)
-            .update(update)
-            .quit_signal(should_quit)
-            .run()
-            .await
-            .unwrap();
-    }
-
-    #[derive(Debug, Default, Clone)]
-    struct Model {
-        value: i32,
-        awake: bool,
-    }
-
-    #[derive(Debug, Clone)]
-    enum AppMsg {
-        Inc,
-        Dec,
-        Quit,
-        Wakeup,
-    }
-
-    async fn init() -> (Model, Effect<AppMsg>) {
-        (
-            Model::default(),
-            Effect::new(async |tx| {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                _ = tx.send_async(AppMsg::Wakeup).await;
-            }),
-        )
-    }
-
-    async fn view(model: &Model) -> View {
-        let count = model.value;
-        ui! {
-            <Block
-                .rounded
-                .title_top="Magical App"
-                Center
-                Height::grow() Width::grow()
-                On::new(handle_quit)
-            >
-                <Block Direction::Horizontal CrossJustify::Center Gap(2)>
-                    <Block
-                        .rounded .title_bottom="j" .title_alignment={ratatui::layout::HorizontalAlignment::Center}
-                        Width::fixed(5) Center On::new(
-                            move |_: &Model, event: &Event| match event {
-                                Event::Key(key!(Char('j'), Press)) => Some((AppMsg::Dec, Effect::none())),
-                                _ => None,
-                            }
-                        )
-                    >
-                        "-"
-                    </Block>
-                    <Block Width::fixed(20) Height::fixed(1) Center>
-                    {
-                        if model.awake {
-                            format!("I have awoken {count}")
-                        } else {
-                            "I sleep...".to_string()
-                        }
-                    }
-                    </Block>
-                    <Block
-                        .rounded .title_bottom="k" .title_alignment={ratatui::layout::HorizontalAlignment::Center}
-                        Width::fixed(5) Center On::new(
-                            move |_: &Model, event: &Event| match event {
-                                Event::Key(key!(Char('k'), Press)) => Some((AppMsg::Inc, Effect::none())),
-                                _ => None,
-                            }
-                        )
-                    >
-                        "+"
-                    </Block>
-                </Block>
-            </Block>
-        }
-    }
-
-    fn handle_quit(_: &Model, event: &DefaultEvent) -> Option<(AppMsg, Effect<AppMsg>)> {
-        match event {
-            Event::Key(key!(Char('q'), Press) | key!(Char('c'), Press, KeyModifiers::CONTROL)) => {
-                Some((AppMsg::Quit, Effect::none()))
-            }
-            _ => None,
-        }
-    }
-
-    async fn update(model: Model, msg: AppMsg) -> (Model, Effect<AppMsg>) {
-        match msg {
-            AppMsg::Inc => (
-                Model {
-                    value: model.value + 1,
-                    ..model
-                },
-                Effect::none(),
-            ),
-            AppMsg::Dec => (
-                Model {
-                    value: model.value - 1,
-                    ..model
-                },
-                Effect::none(),
-            ),
-            AppMsg::Wakeup => (
-                Model {
-                    awake: true,
-                    ..model
-                },
-                Effect::none(),
-            ),
-            AppMsg::Quit => (model, Effect::none()),
-        }
-    }
+pub trait Message: Clone + Component {
+    type Model;
 }

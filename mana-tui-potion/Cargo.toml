@@ -3,6 +3,10 @@ name = "mana-tui-potion"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["crossterm"]
+crossterm = ["dep:crossterm"]
+
 [dependencies]
 mana-tui-elemental.workspace = true
 ratatui.workspace = true
@@ -10,7 +14,7 @@ bon = { workspace = true, features = ["experimental-overwritable"] }
 derive_more.workspace = true
 tracing.workspace = true
 hecs.workspace = true
-crossterm = { version = "0.29.0", default-features = false, features = ["event-stream"] }
+crossterm = { optional = true, version = "0.29.0", default-features = false, features = ["event-stream"] }
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
 tokio = { version = "1.49.0", default-features = false, features = ["macros", "rt", "time"] }
 tokio-stream = { version = "0.1.18", default-features = false }
@@ -18,6 +22,8 @@ mana-tui-utils = { version = "0.1.0", path = "../mana-tui-utils" }
 tailcall = "1.0.1"
 smallbox = { version = "0.8.8", features = ["nightly"] }
 thiserror = "2.0.18"
+im = "15.1.0"
+anyhow = "*"
 
 [dev-dependencies]
 mana-tui-macros.workspace = true 

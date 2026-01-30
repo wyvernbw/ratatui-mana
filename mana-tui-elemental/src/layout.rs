@@ -10,7 +10,7 @@ use std::{
 use derive_more as d;
 use glam::{U16Vec2, u16vec2};
 use hecs::{CommandBuffer, Component, ComponentError, Entity, Query, World};
-use mana_tui_utils::Ecs;
+use mana_tui_utils::{Ecs, EcsMut};
 use ratatui::{
     buffer::Buffer,
     layout::{Direction, Margin, Rect},
@@ -87,6 +87,7 @@ pub struct ElementCtx {
 }
 
 impl Ecs for ElementCtx {}
+impl EcsMut for ElementCtx {}
 
 impl ElementCtx {
     /// create an empty context.
