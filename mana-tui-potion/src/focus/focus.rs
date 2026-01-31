@@ -1,15 +1,17 @@
+pub mod handlers;
+
 use std::any::TypeId;
 
 use hecs::{Entity, Or, World};
 use im::Vector;
 use mana_tui_elemental::layout::{Children, Props};
 use mana_tui_utils::resource::Resources;
-use ratatui::style::Style;
-use smallbox::SmallBox;
+use ratatui::{layout::Rect, style::Style};
 
 use crate::{
     DefaultEvent, Effect, Message,
     backends::{DefaultBackend, DefaultKeyEvent, ManaBackend},
+    focus::handlers::{On, OnClick, OnKey},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -25,47 +27,6 @@ pub enum Navigation {
     #[default]
     Directional,
 }
-
-type CallbackRes<Msg> = Option<(Msg, Effect<Msg>)>;
-type Callback<Msg, Model> = SmallBox<dyn Fn(&Model, &DefaultEvent) -> CallbackRes<Msg>, [usize; 2]>;
-
-pub struct On<Msg: Message>(Callback<Msg, Msg::Model>);
-
-impl<Msg: Message> On<Msg> {
-    pub fn new<F>(func: F) -> Self
-    where
-        F: Fn(&Msg::Model, &DefaultEvent) -> CallbackRes<Msg> + 'static,
-    {
-        On(SmallBox::new(func))
-    }
-}
-
-unsafe impl<Msg: Message> Send for On<Msg> {}
-unsafe impl<Msg: Message> Sync for On<Msg> {}
-
-pub struct OnKey<Msg: Message>(DefaultKeyEvent, Callback<Msg, Msg::Model>);
-
-impl<Msg: Message> OnKey<Msg> {
-    pub fn with_fn<F>(key: DefaultKeyEvent, func: F) -> Self
-    where
-        F: Fn(&Msg::Model, &DefaultEvent) -> CallbackRes<Msg> + 'static,
-    {
-        OnKey(key, SmallBox::new(func))
-    }
-    pub fn new(key: DefaultKeyEvent, app_msg: Msg) -> Self {
-        OnKey(key, SmallBox::new(msg(app_msg)))
-    }
-}
-
-pub fn msg<Model, Msg>(msg: Msg) -> impl Fn(&Model, &DefaultEvent) -> CallbackRes<Msg> + 'static
-where
-    Msg: Clone + Send + Sync + 'static,
-{
-    move |_, _| Some((msg.clone(), Effect::none()))
-}
-
-unsafe impl<Msg: Message> Send for OnKey<Msg> {}
-unsafe impl<Msg: Message> Sync for OnKey<Msg> {}
 
 #[derive(Debug, Clone, Default)]
 pub struct NavGroup {
@@ -168,7 +129,7 @@ macro_rules! try_handler {
     };
 }
 
-pub(crate) fn propagate_event<Msg: Message>(
+pub(crate) fn propagate_key_event<Msg: Message>(
     world: &World,
     model: &Msg::Model,
     msg: &DefaultEvent,
@@ -195,6 +156,67 @@ pub(crate) fn propagate_event<Msg: Message>(
         }
     }
     Ok(None)
+}
+
+pub(crate) fn propagate_mouse_event<Msg: Message>(
+    world: &World,
+    model: &Msg::Model,
+    msg: &DefaultEvent,
+    x_coord: u16,
+    y_coord: u16,
+) -> Result<Option<(Msg, Effect<Msg>)>, anyhow::Error> {
+    #[cfg(feature = "crossterm")]
+    {
+        use crossterm::event::{Event, MouseEvent, MouseEventKind};
+        if !matches!(
+            msg,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(_),
+                ..
+            })
+        ) {
+            return Ok(None);
+        }
+    }
+    let stack = world.get_resource::<&UiStack>()?;
+    let mut query = world.query::<(&OnClick<Msg>, &Props)>();
+    let query = query.view();
+    for group in &stack.stack {
+        for entity in group.elements.iter().copied() {
+            if let Some((OnClick(on_click), props)) = query.get(entity) {
+                let area = Rect {
+                    x: props.position.x,
+                    y: props.position.y,
+                    width: props.size.x,
+                    height: props.size.y,
+                };
+                if area.contains(ratatui::layout::Position {
+                    x: x_coord,
+                    y: y_coord,
+                }) {
+                    try_handler!(world, entity, on_click, model, msg);
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub(crate) fn propagate_event<Msg: Message>(
+    world: &World,
+    model: &Msg::Model,
+    msg: &DefaultEvent,
+) -> Result<Option<(Msg, Effect<Msg>)>, anyhow::Error> {
+    #[cfg(feature = "crossterm")]
+    {
+        match msg {
+            crossterm::event::Event::Key(_) => propagate_key_event(world, model, msg),
+            crossterm::event::Event::Mouse(ev) => {
+                propagate_mouse_event(world, model, msg, ev.column, ev.row)
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 pub(crate) fn try_grab_focus(world: &World, entity: Entity) -> anyhow::Result<()> {

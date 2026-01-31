@@ -2,6 +2,7 @@
 #![allow(clippy::collapsible_if)]
 
 pub mod backends;
+#[path = "./focus/focus.rs"]
 pub mod focus;
 
 use flume::{Receiver, Sender};
@@ -98,7 +99,7 @@ async fn runtime<Msg: Message, B: 'static + ManaBackend>(
             if let Some(prev) = prev_root {
                 ctx.despawn_ui(prev);
             }
-            let root = render::<B>(ctx, root);
+            let root = render::<Msg, B>(ctx, root);
 
             runtime(
                 model,
@@ -127,12 +128,13 @@ async fn runtime<Msg: Message, B: 'static + ManaBackend>(
     }
 }
 
-fn render<B: Backend>(ctx: &mut Ctx<B>, view: View) -> Element {
+fn render<Msg: Message, B: Backend>(ctx: &mut Ctx<B>, view: View) -> Element {
     let root = ctx.spawn_ui(view);
     let result = ctx.terminal.draw(|frame| {
         let result = ctx.el_ctx.calculate_layout(root, frame.area());
         focus::generate_ui_stack(&mut ctx.el_ctx, root);
         focus::init_focus_system(&mut ctx.el_ctx);
+        focus::handlers::specialize_on_click_or_key_handlers::<Msg>(&mut ctx.el_ctx);
         _ = focus::set_focus_style(&mut ctx.el_ctx);
 
         if let Err(err) = result {
@@ -167,10 +169,8 @@ pub async fn run<W, Msg>(
     quit_signal: impl SignalFn<Msg, Msg::Model>,
 ) -> Result<(), RuntimeErr>
 where
-    Msg: Component,
-    Msg: Clone,
+    Msg: Clone + Message + Component,
     W: std::io::Write + 'static,
-    Msg: Message,
 {
     let dispatch = flume::unbounded::<Msg>();
     let mut backend = DefaultBackend::new(writer);
@@ -189,7 +189,7 @@ where
     let (model, effect) = init().await;
     tokio::spawn(effect.0.run_effect(dispatch.0.clone()));
     let tree = view(&model).await;
-    let root = render::<DefaultBackend<W>>(&mut ctx, tree);
+    let root = render::<Msg, DefaultBackend<W>>(&mut ctx, tree);
 
     let result = runtime(
         model,

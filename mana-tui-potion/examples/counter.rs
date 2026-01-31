@@ -1,12 +1,14 @@
+use std::io::stdout;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyEvent, KeyModifiers};
+use crossterm::event::{EnableMouseCapture, Event, KeyEvent, KeyModifiers};
 use mana_tui::key;
 use mana_tui_elemental::prelude::*;
 use mana_tui_elemental::ui::View;
 use mana_tui_macros::ui;
 use mana_tui_potion::backends::{DefaultEvent, KeyEventExt};
-use mana_tui_potion::focus::{FocusStyle, FocusTarget, On, OnKey};
+use mana_tui_potion::focus::handlers::{On, OnClickOrKey, OnKey};
+use mana_tui_potion::focus::{FocusStyle, FocusTarget};
 use mana_tui_potion::{Effect, Message, run};
 use ratatui::style::Style;
 
@@ -45,6 +47,7 @@ impl Message for AppMsg {
 }
 
 async fn init() -> (Model, Effect<AppMsg>) {
+    _ = crossterm::execute!(stdout(), EnableMouseCapture);
     (
         Model::default(),
         Effect::new(async |tx| {
@@ -73,7 +76,8 @@ async fn view(model: &Model) -> View {
                     .rounded .title_bottom="j" .title_alignment={ratatui::layout::HorizontalAlignment::Center}
                     FocusTarget::new::<DecButton>()
                     FocusStyle(Style::new().green())
-                    Width::fixed(5) Center OnKey::new(KeyEvent::char('j'), AppMsg::Dec)
+                    Width::fixed(5) Center
+                    OnClickOrKey::new(KeyEvent::char('j'), AppMsg::Dec)
                 >
                     "-"
                 </Block>
@@ -90,7 +94,7 @@ async fn view(model: &Model) -> View {
                     .rounded .title_bottom="k" .title_alignment={ratatui::layout::HorizontalAlignment::Center}
                     FocusTarget::new::<IncButton>()
                     FocusStyle(Style::new().green())
-                    Width::fixed(5) Center OnKey::new(KeyEvent::char('k'), AppMsg::Inc)
+                    Width::fixed(5) Center OnClickOrKey::new(KeyEvent::char('k'), AppMsg::Inc)
                 >
                     "+"
                 </Block>
